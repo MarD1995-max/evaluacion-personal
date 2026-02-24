@@ -49,6 +49,7 @@ interface AuthUser {
 }
 
 const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzEuIQobhqBFdGHZqm5-0hwwmeloAQz9mmYuAYDy3OS2fjqoCq-EjkOtcX5Dv6mTN8XQg/exec";
+const FALLBACK_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQ5g0DjdNowSGHn1ITl9e73QP6Axq56uQzfmMYBTIFS7rpsTxn4TR_9kP4CoLUZCA/pub?output=csv";
 
 const INITIAL_USERS: AuthUser[] = [
   { email: 'mruiz@acerosarequipa.com', password: '123', name: 'Administrador', assignedArea: 'ADMIN' },
@@ -74,6 +75,7 @@ export default function App() {
   const [data, setData] = useState<EvaluationData[]>([]);
   const [users, setUsers] = useState<AuthUser[]>(INITIAL_USERS);
   const [isLoadingExternal, setIsLoadingExternal] = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [scores, setScores] = useState<ScoreState>(() => {
     const saved = localStorage.getItem('eval_scores');
     return saved ? JSON.parse(saved) : {};
@@ -104,12 +106,24 @@ export default function App() {
     const fetchExternalData = async () => {
       const fetchUrl = `${APPS_SCRIPT_URL}${APPS_SCRIPT_URL.includes('?') ? '&' : '?'}sheet=Protocolo_de_evaluación`;
       console.log("Starting fetch from:", fetchUrl);
+      setFetchError(null);
+      
       try {
         setIsLoadingExternal(true);
-        const response = await fetch(fetchUrl);
+        let response;
+        try {
+          response = await fetch(fetchUrl, {
+            method: 'GET',
+            mode: 'cors',
+            credentials: 'omit'
+          });
+        } catch (e) {
+          console.warn("Apps Script fetch failed, trying fallback CSV...", e);
+          response = await fetch(FALLBACK_CSV_URL);
+        }
         
         if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
+          throw new Error(`Error de servidor: ${response.status} ${response.statusText}`);
         }
 
         const contentType = response.headers.get("content-type");
@@ -143,9 +157,15 @@ export default function App() {
         if (rawRows && rawRows.length > 0) {
           console.log(`Processing ${rawRows.length} rows...`);
           
-          // Helper to find column value regardless of casing or underscores/spaces
+          // Helper to find column value regardless of casing, underscores, spaces or accents
+          const normalize = (s: string) => 
+            s.toUpperCase()
+             .normalize("NFD")
+             .replace(/[\u0300-\u036f]/g, "")
+             .trim()
+             .replace(/[\s_]/g, '');
+
           const getVal = (row: any, keys: string[]) => {
-            const normalize = (s: string) => s.toUpperCase().trim().replace(/[\s_]/g, '');
             const normalizedKeys = keys.map(normalize);
             const foundKey = Object.keys(row).find(k => normalizedKeys.includes(normalize(k)));
             return foundKey ? String(row[foundKey]).trim() : '';
@@ -190,12 +210,17 @@ export default function App() {
             setUsers(mappedUsers);
             localStorage.setItem('eval_data', JSON.stringify(mappedData));
             localStorage.setItem('eval_users', JSON.stringify(mappedUsers));
+          } else {
+            setFetchError("No se encontraron datos válidos en la hoja 'Protocolo_de_evaluación'. Verifique los nombres de las columnas.");
           }
         } else {
           console.warn("No rows found in external data.");
+          setFetchError("La respuesta de Google Sheets está vacía o no tiene el formato esperado.");
         }
-      } catch (error) {
+      } catch (error: any) {
         console.error("Error fetching external data:", error);
+        setFetchError(`Error de conexión: ${error.message || 'Error desconocido'}. Asegúrese de que el script esté publicado correctamente.`);
+        
         // Fallback to local storage
         const savedData = localStorage.getItem('eval_data');
         const savedUsers = localStorage.getItem('eval_users');
@@ -625,10 +650,35 @@ export default function App() {
   // Login Screen
   if (isLoadingExternal && data.length === 0) {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-        <div className="text-center space-y-4">
-          <RefreshCw className="w-12 h-12 text-[#004a7c] animate-spin mx-auto" />
-          <p className="text-slate-600 font-medium">Cargando datos desde Google Sheets...</p>
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+        <div className="text-center space-y-6 max-w-md">
+          {fetchError ? (
+            <motion.div 
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="bg-white p-8 rounded-3xl shadow-xl border border-red-100 space-y-4"
+            >
+              <div className="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center mx-auto text-red-500">
+                <AlertTriangle size={32} />
+              </div>
+              <h2 className="text-xl font-bold text-slate-800">Error de Conexión</h2>
+              <p className="text-slate-600 text-sm leading-relaxed">
+                {fetchError}
+              </p>
+              <button 
+                onClick={() => window.location.reload()}
+                className="w-full py-3 bg-[#004a7c] text-white font-bold rounded-xl hover:bg-[#003a63] transition-all"
+              >
+                Reintentar Conexión
+              </button>
+            </motion.div>
+          ) : (
+            <div className="space-y-4">
+              <RefreshCw className="w-12 h-12 text-[#004a7c] animate-spin mx-auto" />
+              <p className="text-slate-600 font-medium">Sincronizando con Google Sheets...</p>
+              <p className="text-slate-400 text-xs">Obteniendo Protocolo de Evaluación</p>
+            </div>
+          )}
         </div>
       </div>
     );
