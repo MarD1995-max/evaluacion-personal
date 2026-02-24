@@ -534,7 +534,7 @@ export default function App() {
           className="space-y-6"
         >
           {/* Filters */}
-          <div className={`grid grid-cols-1 ${user.assignedArea === 'ADMIN' ? 'md:grid-cols-3' : 'md:grid-cols-2'} gap-4 bg-white p-6 rounded-2xl shadow-sm border border-slate-100`}>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
             <div className="space-y-2">
               <label className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-2">
                 <Filter size={12} /> Gerencia
@@ -581,26 +581,6 @@ export default function App() {
                 )}
               </div>
             </div>
-
-            {user.assignedArea === 'ADMIN' && (
-              <div className="space-y-2">
-                <label className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-2">
-                  <Filter size={12} /> Puesto
-                </label>
-                <div className="relative">
-                  <select 
-                    value={filters.puesto}
-                    onChange={(e) => setFilters(f => ({ ...f, puesto: e.target.value }))}
-                    disabled={isLocked}
-                    className="w-full appearance-none bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#004a7c]/20 focus:border-[#004a7c] transition-all disabled:opacity-50"
-                  >
-                    <option value="">Todos los Puestos</option>
-                    {puestos.map(p => <option key={p} value={p}>{p}</option>)}
-                  </select>
-                  <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={16} />
-                </div>
-              </div>
-            )}
           </div>
 
           {/* Admin Upload Button */}
@@ -622,9 +602,7 @@ export default function App() {
           {/* Evaluation Tables */}
           {filters.area ? (
             <div className="space-y-8">
-              {(Object.entries(dataByPuesto) as [string, { colaboradores: string[], competencias: string[] }][])
-                .filter(([puesto]) => !filters.puesto || puesto === filters.puesto)
-                .map(([puesto, info]) => (
+              {(Object.entries(dataByPuesto) as [string, { colaboradores: string[], competencias: string[] }][]).map(([puesto, info]) => (
                 <div key={puesto} className={`bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden transition-all ${isLocked ? 'ring-4 ring-amber-100' : ''}`}>
                   <div className="bg-[#004a7c] px-6 py-3 flex items-center justify-between text-white">
                     <h2 className="font-bold uppercase tracking-wider flex items-center gap-2">
