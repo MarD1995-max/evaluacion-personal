@@ -29,10 +29,10 @@ interface AuthUser {
   assignedArea: string;
 }
 
-const AUTHORIZED_USERS: AuthUser[] = [
+const INITIAL_USERS: AuthUser[] = [
+  { email: 'mruiz@acerosarequipa.com', password: '123', name: 'Administrador', assignedArea: 'ADMIN' },
   { email: 'marlon@empresa.com', password: '123', name: 'Marlon Ruiz', assignedArea: 'Hornos eléctricos' },
   { email: 'juan@empresa.com', password: '123', name: 'Juan Perez', assignedArea: 'Refractarios' },
-  { email: 'admin@empresa.com', password: 'admin', name: 'Administrador', assignedArea: 'TALENTO Y DESARROLLO HUMANO' },
 ];
 
 // Pre-stored template data
@@ -71,12 +71,19 @@ const LEVELS = [
 
 export default function App() {
   // Auth State
+  const [users, setUsers] = useState<AuthUser[]>(() => {
+    const saved = localStorage.getItem('eval_users');
+    return saved ? JSON.parse(saved) : INITIAL_USERS;
+  });
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loginForm, setLoginForm] = useState({ email: '', password: '' });
   const [loginError, setLoginError] = useState('');
 
   // App State
-  const [data, setData] = useState<EvaluationData[]>(INITIAL_DATA);
+  const [data, setData] = useState<EvaluationData[]>(() => {
+    const saved = localStorage.getItem('eval_data');
+    return saved ? JSON.parse(saved) : INITIAL_DATA;
+  });
   const [scores, setScores] = useState<ScoreState>({});
   const [filters, setFilters] = useState({
     gerencia: '',
@@ -85,11 +92,24 @@ export default function App() {
   });
   const [isLocked, setIsLocked] = useState(false);
   const [showEvidenceModal, setShowEvidenceModal] = useState(false);
+  const [showAddEvaluatorModal, setShowAddEvaluatorModal] = useState(false);
+  const [showFormatModal, setShowFormatModal] = useState(false);
+  const [selectedAreaForEvaluator, setSelectedAreaForEvaluator] = useState('');
+  const [newEvaluator, setNewEvaluator] = useState({ name: '', email: '', password: '' });
   const [evidence, setEvidence] = useState({
     photo: '',
     signature: '',
     fullName: '',
   });
+
+  // Persist Data
+  useEffect(() => {
+    localStorage.setItem('eval_users', JSON.stringify(users));
+  }, [users]);
+
+  useEffect(() => {
+    localStorage.setItem('eval_data', JSON.stringify(data));
+  }, [data]);
 
   // Refs
   const webcamRef = useRef<Webcam>(null);
@@ -106,19 +126,21 @@ export default function App() {
   // Auth Handlers
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    const found = AUTHORIZED_USERS.find(u => u.email === loginForm.email && u.password === loginForm.password);
+    const found = users.find(u => u.email === loginForm.email && u.password === loginForm.password);
     if (found) {
       setUser(found);
       setLoginError('');
       
-      // Auto-filter based on user's assigned area
-      const userAreaMatch = data.find(d => d.area === found.assignedArea);
-      if (userAreaMatch) {
-        setFilters({
-          gerencia: userAreaMatch.gerencia,
-          area: userAreaMatch.area,
-          puesto: userAreaMatch.puesto,
-        });
+      // Auto-filter based on user's assigned area (if not admin)
+      if (found.assignedArea !== 'ADMIN') {
+        const userAreaMatch = data.find(d => d.area === found.assignedArea);
+        if (userAreaMatch) {
+          setFilters({
+            gerencia: userAreaMatch.gerencia,
+            area: userAreaMatch.area,
+            puesto: userAreaMatch.puesto,
+          });
+        }
       }
     } else {
       setLoginError('Credenciales incorrectas');
@@ -136,7 +158,7 @@ export default function App() {
   // Filter Options (Restricted by User Role)
   const filteredData = useMemo(() => {
     if (!user) return [];
-    if (user.email === 'admin@empresa.com') return data;
+    if (user.assignedArea === 'ADMIN') return data;
     return data.filter(d => d.area === user.assignedArea);
   }, [data, user]);
 
@@ -329,6 +351,61 @@ export default function App() {
     alert("Evaluación finalizada. Se han descargado los archivos Excel y PDF.");
   };
 
+  const handleAdminFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const bstr = evt.target?.result;
+      const wb = XLSX.read(bstr, { type: 'binary' });
+      const wsname = wb.SheetNames[0];
+      const ws = wb.Sheets[wsname];
+      const rawData = XLSX.utils.sheet_to_json(ws);
+      
+      // Map raw data to EvaluationData interface
+      const mappedData: EvaluationData[] = rawData.map((row: any) => ({
+        gerencia: String(row.GERENCIA || row.Gerencia || '').trim(),
+        area: String(row.AREA || row.Area || '').trim(),
+        puesto: String(row.PUESTO || row.Puesto || '').trim(),
+        colaborador: String(row.COLABORADOR || row.Colaborador || '').trim(),
+        competencia: String(row.COMPETENCIA || row.Competencia || '').trim(),
+      })).filter(d => d.gerencia && d.area && d.puesto && d.colaborador && d.competencia);
+
+      if (mappedData.length > 0) {
+        setData(mappedData);
+        setFilters({ gerencia: '', area: '', puesto: '' }); // Reset filters to force re-selection
+        setScores({}); // Reset scores for new data
+        alert(`Se han cargado ${mappedData.length} registros correctamente. Las matrices se han actualizado.`);
+      } else {
+        alert("El archivo no tiene el formato correcto o está vacío. Asegúrese de incluir las columnas: GERENCIA, AREA, PUESTO, COLABORADOR, COMPETENCIA.");
+      }
+    };
+    reader.readAsBinaryString(file);
+    // Clear input value to allow re-uploading same file
+    e.target.value = '';
+  };
+
+  const handleAddEvaluator = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newEvaluator.name || !newEvaluator.email || !newEvaluator.password) {
+      alert("Por favor complete todos los campos.");
+      return;
+    }
+
+    const newUser: AuthUser = {
+      name: newEvaluator.name,
+      email: newEvaluator.email,
+      password: newEvaluator.password,
+      assignedArea: selectedAreaForEvaluator
+    };
+
+    setUsers(prev => [...prev, newUser]);
+    setShowAddEvaluatorModal(false);
+    setNewEvaluator({ name: '', email: '', password: '' });
+    alert(`Evaluador ${newUser.name} agregado correctamente para el área ${selectedAreaForEvaluator}`);
+  };
+
   // Login Screen
   if (!user) {
     return (
@@ -343,7 +420,7 @@ export default function App() {
               <Lock size={40} />
             </div>
             <h1 className="text-2xl font-bold text-slate-800">Acceso al Sistema</h1>
-            <p className="text-slate-500">Ingresa tus credenciales de evaluador</p>
+            <p className="text-slate-500">Ingresa tus credenciales</p>
           </div>
 
           <form onSubmit={handleLogin} className="space-y-6">
@@ -393,7 +470,7 @@ export default function App() {
 
           <div className="pt-4 border-t border-slate-100">
             <p className="text-center text-xs text-slate-400">
-              Marlon Ruiz: marlon@empresa.com / 123
+              Gestión de Talento Humano
             </p>
           </div>
         </motion.div>
@@ -457,7 +534,7 @@ export default function App() {
           className="space-y-6"
         >
           {/* Filters */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+          <div className={`grid grid-cols-1 ${user.assignedArea === 'ADMIN' ? 'md:grid-cols-3' : 'md:grid-cols-2'} gap-4 bg-white p-6 rounded-2xl shadow-sm border border-slate-100`}>
             <div className="space-y-2">
               <label className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-2">
                 <Filter size={12} /> Gerencia
@@ -480,25 +557,74 @@ export default function App() {
               <label className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-2">
                 <Filter size={12} /> Área
               </label>
-              <div className="relative">
-                <select 
-                  value={filters.area}
-                  onChange={(e) => setFilters(f => ({ ...f, area: e.target.value, puesto: '' }))}
-                  disabled={isLocked}
-                  className="w-full appearance-none bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#004a7c]/20 focus:border-[#004a7c] transition-all disabled:opacity-50"
-                >
-                  <option value="">Seleccionar Área</option>
-                  {areas.map(a => <option key={a} value={a}>{a}</option>)}
-                </select>
-                <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={16} />
+              <div className="relative flex items-center gap-2">
+                <div className="relative flex-1">
+                  <select 
+                    value={filters.area}
+                    onChange={(e) => setFilters(f => ({ ...f, area: e.target.value, puesto: '' }))}
+                    disabled={isLocked}
+                    className="w-full appearance-none bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#004a7c]/20 focus:border-[#004a7c] transition-all disabled:opacity-50"
+                  >
+                    <option value="">Seleccionar Área</option>
+                    {areas.map(a => <option key={a} value={a}>{a}</option>)}
+                  </select>
+                  <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={16} />
+                </div>
+                {user.assignedArea === 'ADMIN' && filters.area && (
+                  <button 
+                    onClick={() => { setSelectedAreaForEvaluator(filters.area); setShowAddEvaluatorModal(true); }}
+                    className="p-2.5 bg-[#004a7c] text-white rounded-xl hover:bg-[#003a63] transition-colors shadow-md"
+                    title="Agregar Evaluador"
+                  >
+                    <User size={20} />
+                  </button>
+                )}
               </div>
             </div>
+
+            {user.assignedArea === 'ADMIN' && (
+              <div className="space-y-2">
+                <label className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-2">
+                  <Filter size={12} /> Puesto
+                </label>
+                <div className="relative">
+                  <select 
+                    value={filters.puesto}
+                    onChange={(e) => setFilters(f => ({ ...f, puesto: e.target.value }))}
+                    disabled={isLocked}
+                    className="w-full appearance-none bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#004a7c]/20 focus:border-[#004a7c] transition-all disabled:opacity-50"
+                  >
+                    <option value="">Todos los Puestos</option>
+                    {puestos.map(p => <option key={p} value={p}>{p}</option>)}
+                  </select>
+                  <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={16} />
+                </div>
+              </div>
+            )}
           </div>
+
+          {/* Admin Upload Button */}
+          {user.assignedArea === 'ADMIN' && (
+            <div className="flex justify-end gap-3">
+              <button 
+                onClick={() => setShowFormatModal(true)}
+                className="flex items-center gap-2 px-4 py-2.5 bg-blue-50 text-[#004a7c] font-bold rounded-xl hover:bg-blue-100 transition-colors border border-blue-200"
+              >
+                <Info size={18} /> Ver Formato
+              </button>
+              <label className="flex items-center gap-2 px-6 py-2.5 bg-slate-800 text-white font-bold rounded-xl hover:bg-slate-900 transition-colors shadow-lg cursor-pointer">
+                <Upload size={18} /> Cargar Matriz Excel
+                <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleAdminFileUpload} />
+              </label>
+            </div>
+          )}
 
           {/* Evaluation Tables */}
           {filters.area ? (
             <div className="space-y-8">
-              {(Object.entries(dataByPuesto) as [string, { colaboradores: string[], competencias: string[] }][]).map(([puesto, info]) => (
+              {(Object.entries(dataByPuesto) as [string, { colaboradores: string[], competencias: string[] }][])
+                .filter(([puesto]) => !filters.puesto || puesto === filters.puesto)
+                .map(([puesto, info]) => (
                 <div key={puesto} className={`bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden transition-all ${isLocked ? 'ring-4 ring-amber-100' : ''}`}>
                   <div className="bg-[#004a7c] px-6 py-3 flex items-center justify-between text-white">
                     <h2 className="font-bold uppercase tracking-wider flex items-center gap-2">
@@ -619,7 +745,129 @@ export default function App() {
         </motion.div>
       </div>
 
-      {/* Evidence Modal */}
+      {/* Format Info Modal */}
+      <AnimatePresence>
+        {showFormatModal && (
+          <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9 }}
+              className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden"
+            >
+              <div className="bg-[#004a7c] p-6 text-white">
+                <h2 className="text-xl font-bold flex items-center gap-2">
+                  <FileText size={24} /> Formato de Carga
+                </h2>
+              </div>
+              <div className="p-8 space-y-4">
+                <p className="text-slate-600 text-sm">
+                  Para que el sistema genere la matriz correctamente, el archivo Excel debe contener las siguientes columnas (encabezados):
+                </p>
+                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-2">
+                  <div className="flex items-center gap-2 text-sm font-bold text-slate-700">
+                    <div className="w-2 h-2 bg-[#004a7c] rounded-full" /> GERENCIA
+                  </div>
+                  <div className="flex items-center gap-2 text-sm font-bold text-slate-700">
+                    <div className="w-2 h-2 bg-[#004a7c] rounded-full" /> AREA
+                  </div>
+                  <div className="flex items-center gap-2 text-sm font-bold text-slate-700">
+                    <div className="w-2 h-2 bg-[#004a7c] rounded-full" /> PUESTO
+                  </div>
+                  <div className="flex items-center gap-2 text-sm font-bold text-slate-700">
+                    <div className="w-2 h-2 bg-[#004a7c] rounded-full" /> COLABORADOR
+                  </div>
+                  <div className="flex items-center gap-2 text-sm font-bold text-slate-700">
+                    <div className="w-2 h-2 bg-[#004a7c] rounded-full" /> COMPETENCIA
+                  </div>
+                </div>
+                <p className="text-xs text-slate-400 italic">
+                  * El orden de las columnas no importa, pero los nombres deben coincidir exactamente.
+                </p>
+                <div className="flex justify-end pt-4">
+                  <button 
+                    onClick={() => setShowFormatModal(false)}
+                    className="px-8 py-2.5 bg-[#004a7c] text-white font-bold rounded-xl hover:bg-[#003a63] shadow-lg transition-all"
+                  >
+                    Entendido
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Add Evaluator Modal */}
+      <AnimatePresence>
+        {showAddEvaluatorModal && (
+          <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9 }}
+              className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden"
+            >
+              <div className="bg-[#004a7c] p-6 text-white">
+                <h2 className="text-xl font-bold flex items-center gap-2">
+                  <User size={24} /> Agregar Evaluador
+                </h2>
+                <p className="text-blue-100 text-sm mt-1">Área: {selectedAreaForEvaluator}</p>
+              </div>
+              <form onSubmit={handleAddEvaluator} className="p-8 space-y-6">
+                <div className="space-y-2">
+                  <label className="text-sm font-bold text-slate-700">Nombres Completos</label>
+                  <input 
+                    type="text"
+                    required
+                    value={newEvaluator.name}
+                    onChange={e => setNewEvaluator(p => ({ ...p, name: e.target.value }))}
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-[#004a7c]/20 outline-none"
+                    placeholder="Ej: Juan Perez"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-bold text-slate-700">Correo Corporativo</label>
+                  <input 
+                    type="email"
+                    required
+                    value={newEvaluator.email}
+                    onChange={e => setNewEvaluator(p => ({ ...p, email: e.target.value }))}
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-[#004a7c]/20 outline-none"
+                    placeholder="ejemplo@acerosarequipa.com"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-bold text-slate-700">Contraseña</label>
+                  <input 
+                    type="password"
+                    required
+                    value={newEvaluator.password}
+                    onChange={e => setNewEvaluator(p => ({ ...p, password: e.target.value }))}
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-[#004a7c]/20 outline-none"
+                    placeholder="••••••••"
+                  />
+                </div>
+                <div className="flex justify-end gap-3 pt-4">
+                  <button 
+                    type="button"
+                    onClick={() => setShowAddEvaluatorModal(false)}
+                    className="px-6 py-2.5 text-slate-500 font-bold hover:bg-slate-100 rounded-xl transition-all"
+                  >
+                    Cancelar
+                  </button>
+                  <button 
+                    type="submit"
+                    className="px-6 py-2.5 bg-[#004a7c] text-white font-bold rounded-xl hover:bg-[#003a63] shadow-lg transition-all"
+                  >
+                    Guardar
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
       <AnimatePresence>
         {showEvidenceModal && (
           <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">
