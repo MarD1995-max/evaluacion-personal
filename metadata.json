@@ -1,0 +1,7 @@
+{
+  "name": "Evaluación de Competencias",
+  "description": "Sistema de evaluación de personal por competencias con carga de datos desde Excel.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
