@@ -84,7 +84,14 @@ export default function App() {
     const saved = localStorage.getItem('eval_data');
     return saved ? JSON.parse(saved) : INITIAL_DATA;
   });
-  const [scores, setScores] = useState<ScoreState>({});
+  const [scores, setScores] = useState<ScoreState>(() => {
+    const saved = localStorage.getItem('eval_scores');
+    return saved ? JSON.parse(saved) : {};
+  });
+  const [completedAreas, setCompletedAreas] = useState<string[]>(() => {
+    const saved = localStorage.getItem('eval_completed_areas');
+    return saved ? JSON.parse(saved) : [];
+  });
   const [filters, setFilters] = useState({
     gerencia: '',
     area: '',
@@ -102,6 +109,17 @@ export default function App() {
     fullName: '',
   });
 
+  // Auto-lock based on area completion
+  useEffect(() => {
+    if (!showEvidenceModal) {
+      if (filters.area && completedAreas.includes(filters.area)) {
+        setIsLocked(true);
+      } else {
+        setIsLocked(false);
+      }
+    }
+  }, [filters.area, completedAreas, showEvidenceModal]);
+
   // Persist Data
   useEffect(() => {
     localStorage.setItem('eval_users', JSON.stringify(users));
@@ -110,6 +128,14 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('eval_data', JSON.stringify(data));
   }, [data]);
+
+  useEffect(() => {
+    localStorage.setItem('eval_scores', JSON.stringify(scores));
+  }, [scores]);
+
+  useEffect(() => {
+    localStorage.setItem('eval_completed_areas', JSON.stringify(completedAreas));
+  }, [completedAreas]);
 
   // Refs
   const webcamRef = useRef<Webcam>(null);
@@ -140,6 +166,10 @@ export default function App() {
             area: userAreaMatch.area,
             puesto: userAreaMatch.puesto,
           });
+        }
+        // Check if area is already completed
+        if (completedAreas.includes(found.assignedArea)) {
+          setIsLocked(true);
         }
       }
     } else {
@@ -324,31 +354,82 @@ export default function App() {
     pdf.text(`Fecha: ${new Date().toLocaleString()}`, 20, 44);
 
     let y = 60;
+
+    // Add Photo if exists
+    if (finalEvidence.photo) {
+      try {
+        pdf.addImage(finalEvidence.photo, 'JPEG', 140, 25, 50, 35);
+        pdf.setFontSize(8);
+        pdf.text("Foto de Validación", 140, 63);
+        pdf.setFontSize(12);
+      } catch (e) {
+        console.error("Error adding photo to PDF", e);
+      }
+    }
+
     (Object.entries(dataByPuesto) as [string, { colaboradores: string[], competencias: string[] }][]).forEach(([puesto, info]) => {
       pdf.setFont("helvetica", "bold");
       pdf.text(`Puesto: ${puesto}`, 20, y);
-      y += 7;
-      pdf.setFont("helvetica", "normal");
+      y += 8;
+      
       info.colaboradores.forEach(colab => {
         const pct = calculatePercentage(colab, info.competencias);
-        pdf.text(`- ${colab}: ${pct}% (${getStatus(pct).label})`, 25, y);
+        pdf.setFont("helvetica", "bold");
+        pdf.text(`${colab}: ${pct}% (${getStatus(pct).label})`, 25, y);
         y += 6;
+        
+        // Detailed scores
+        pdf.setFont("helvetica", "italic");
+        pdf.setFontSize(10);
+        info.competencias.forEach(comp => {
+          const score = scores[colab]?.[comp] ?? 0;
+          pdf.text(`- ${comp}: Nivel ${score}`, 30, y);
+          y += 5;
+          if (y > 270) { pdf.addPage(); y = 20; }
+        });
+        pdf.setFontSize(12);
+        y += 5;
         if (y > 270) { pdf.addPage(); y = 20; }
       });
       y += 5;
+      if (y > 270) { pdf.addPage(); y = 20; }
     });
 
     if (finalEvidence.signature) {
-      pdf.addPage();
-      pdf.text("Evidencia de Firma:", 20, 20);
-      pdf.addImage(finalEvidence.signature, 'PNG', 20, 30, 60, 30);
-      pdf.text(`Nombre: ${finalEvidence.fullName}`, 20, 70);
+      if (y > 220) { pdf.addPage(); y = 20; }
+      y += 10;
+      pdf.setFont("helvetica", "bold");
+      pdf.text("Evidencia de Firma:", 20, y);
+      y += 5;
+      pdf.addImage(finalEvidence.signature, 'PNG', 20, y, 60, 30);
+      y += 35;
+      pdf.text(`Nombre: ${finalEvidence.fullName}`, 20, y);
     }
 
     pdf.save(`Evaluacion_${filters.area}_${user?.name}.pdf`);
 
+    setCompletedAreas(prev => [...prev, filters.area]);
     setShowEvidenceModal(false);
     alert("Evaluación finalizada. Se han descargado los archivos Excel y PDF.");
+  };
+
+  const handleRefreshArea = (areaName: string) => {
+    if (window.confirm(`¿Está seguro de reiniciar el área "${areaName}"? Se borrarán todos los puntajes y se habilitará nuevamente para evaluación.`)) {
+      // Remove from completed
+      setCompletedAreas(prev => prev.filter(a => a !== areaName));
+      
+      // Clear scores for collaborators in this area
+      const areaColaboradores = new Set<string>(data.filter(d => d.area === areaName).map(d => d.colaborador));
+      setScores(prev => {
+        const newScores: ScoreState = { ...prev };
+        areaColaboradores.forEach((colab: string) => {
+          delete newScores[colab];
+        });
+        return newScores;
+      });
+      
+      alert(`Área "${areaName}" reiniciada correctamente.`);
+    }
   };
 
   const handleAdminFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -562,7 +643,7 @@ export default function App() {
                   <select 
                     value={filters.area}
                     onChange={(e) => setFilters(f => ({ ...f, area: e.target.value, puesto: '' }))}
-                    disabled={isLocked}
+                    disabled={isLocked && user.assignedArea !== 'ADMIN'}
                     className="w-full appearance-none bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#004a7c]/20 focus:border-[#004a7c] transition-all disabled:opacity-50"
                   >
                     <option value="">Seleccionar Área</option>
@@ -571,13 +652,29 @@ export default function App() {
                   <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={16} />
                 </div>
                 {user.assignedArea === 'ADMIN' && filters.area && (
-                  <button 
-                    onClick={() => { setSelectedAreaForEvaluator(filters.area); setShowAddEvaluatorModal(true); }}
-                    className="p-2.5 bg-[#004a7c] text-white rounded-xl hover:bg-[#003a63] transition-colors shadow-md"
-                    title="Agregar Evaluador"
-                  >
-                    <User size={20} />
-                  </button>
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={() => { setSelectedAreaForEvaluator(filters.area); setShowAddEvaluatorModal(true); }}
+                      className="p-2.5 bg-[#004a7c] text-white rounded-xl hover:bg-[#003a63] transition-colors shadow-md"
+                      title="Agregar Evaluador"
+                    >
+                      <User size={20} />
+                    </button>
+                    <button 
+                      onClick={() => handleRefreshArea(filters.area)}
+                      className="p-2.5 bg-amber-500 text-white rounded-xl hover:bg-amber-600 transition-colors shadow-md"
+                      title="Reiniciar Área (Refresh)"
+                    >
+                      <TrendingUp className="rotate-180" size={20} />
+                    </button>
+                    <div className={`flex items-center px-3 rounded-xl text-xs font-bold uppercase border ${
+                      completedAreas.includes(filters.area) 
+                        ? 'bg-emerald-100 text-emerald-700 border-emerald-200' 
+                        : 'bg-slate-100 text-slate-500 border-slate-200'
+                    }`}>
+                      {completedAreas.includes(filters.area) ? 'Completado' : 'Pendiente'}
+                    </div>
+                  </div>
                 )}
               </div>
             </div>
