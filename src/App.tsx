@@ -2,12 +2,31 @@ import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
-import { Upload, ChevronDown, Filter, Info, CheckCircle2, AlertCircle, Download, Lock, User, Camera, PenTool, Save, LogOut, ShieldCheck, TrendingUp, AlertTriangle, FileText } from 'lucide-react';
+import { 
+  Upload, 
+  ChevronDown, 
+  Filter, 
+  Info, 
+  CheckCircle2, 
+  AlertCircle, 
+  Download, 
+  Lock, 
+  User, 
+  Camera, 
+  PenTool, 
+  Save, 
+  LogOut, 
+  ShieldCheck, 
+  TrendingUp, 
+  AlertTriangle, 
+  FileText,
+  RefreshCw
+} from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import Webcam from 'react-webcam';
 import SignaturePad from 'signature_pad';
-
-// Types
+import Papa from 'papaparse';
+import 'jspdf-autotable';
 interface EvaluationData {
   gerencia: string;
   area: string;
@@ -29,38 +48,14 @@ interface AuthUser {
   assignedArea: string;
 }
 
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxI6N2RGz8cXG_WSkZ2_ktVX0knKc-kbXFXA1VuMeR6PIsB8UTXu8x4-ZIlw-U9u8ZhYg/exec";
+
 const INITIAL_USERS: AuthUser[] = [
   { email: 'mruiz@acerosarequipa.com', password: '123', name: 'Administrador', assignedArea: 'ADMIN' },
-  { email: 'marlon@empresa.com', password: '123', name: 'Marlon Ruiz', assignedArea: 'Hornos eléctricos' },
-  { email: 'juan@empresa.com', password: '123', name: 'Juan Perez', assignedArea: 'Refractarios' },
 ];
 
-// Pre-stored template data
-const INITIAL_DATA: EvaluationData[] = [
-  // Hornos eléctricos (Marlon Ruiz)
-  { gerencia: 'GERENCIA DE PRODUCCION', area: 'Hornos eléctricos', puesto: 'OPERADOR DE HORNO', colaborador: 'JUAN VALDEZ', competencia: 'OPERACIÓN DE PANEL' },
-  { gerencia: 'GERENCIA DE PRODUCCION', area: 'Hornos eléctricos', puesto: 'OPERADOR DE HORNO', colaborador: 'JUAN VALDEZ', competencia: 'SEGURIDAD EN FUNDICIÓN' },
-  { gerencia: 'GERENCIA DE PRODUCCION', area: 'Hornos eléctricos', puesto: 'OPERADOR DE HORNO', colaborador: 'JUAN VALDEZ', competencia: 'CONTROL DE TEMPERATURA' },
-  { gerencia: 'GERENCIA DE PRODUCCION', area: 'Hornos eléctricos', puesto: 'OPERADOR DE HORNO', colaborador: 'PEDRO PICAPIEDRA', competencia: 'OPERACIÓN DE PANEL' },
-  { gerencia: 'GERENCIA DE PRODUCCION', area: 'Hornos eléctricos', puesto: 'OPERADOR DE HORNO', colaborador: 'PEDRO PICAPIEDRA', competencia: 'SEGURIDAD EN FUNDICIÓN' },
-  { gerencia: 'GERENCIA DE PRODUCCION', area: 'Hornos eléctricos', puesto: 'OPERADOR DE HORNO', colaborador: 'PEDRO PICAPIEDRA', competencia: 'CONTROL DE TEMPERATURA' },
-  { gerencia: 'GERENCIA DE PRODUCCION', area: 'Hornos eléctricos', puesto: 'TECNICO DE MANTENIMIENTO', colaborador: 'CARLOS RUIZ', competencia: 'MANTENIMIENTO PREVENTIVO' },
-  { gerencia: 'GERENCIA DE PRODUCCION', area: 'Hornos eléctricos', puesto: 'TECNICO DE MANTENIMIENTO', colaborador: 'CARLOS RUIZ', competencia: 'DIAGNOSTICO DE FALLAS' },
-  { gerencia: 'GERENCIA DE PRODUCCION', area: 'Hornos eléctricos', puesto: 'AYUDANTE GENERAL', colaborador: 'JOSE LOPEZ', competencia: 'LIMPIEZA DE AREA' },
-  { gerencia: 'GERENCIA DE PRODUCCION', area: 'Hornos eléctricos', puesto: 'AYUDANTE GENERAL', colaborador: 'JOSE LOPEZ', competencia: 'APOYO EN CARGA' },
-  
-  // Refractarios (Juan Perez)
-  { gerencia: 'GERENCIA DE PRODUCCION', area: 'Refractarios', puesto: 'TECNICO REFRACTARIO', colaborador: 'LUIS LINO', competencia: 'MEZCLA DE MATERIAL' },
-  { gerencia: 'GERENCIA DE PRODUCCION', area: 'Refractarios', puesto: 'TECNICO REFRACTARIO', colaborador: 'LUIS LINO', competencia: 'APLICACIÓN DE MORTERO' },
-  { gerencia: 'GERENCIA DE PRODUCCION', area: 'Refractarios', puesto: 'TECNICO REFRACTARIO', colaborador: 'MARIO NAVARRETE', competencia: 'MEZCLA DE MATERIAL' },
-  { gerencia: 'GERENCIA DE PRODUCCION', area: 'Refractarios', puesto: 'TECNICO REFRACTARIO', colaborador: 'MARIO NAVARRETE', competencia: 'APLICACIÓN DE MORTERO' },
-
-  // Talento Humano (Admin)
-  { gerencia: 'GESTION DE CAPITAL HUMANO', area: 'TALENTO Y DESARROLLO HUMANO', puesto: 'ANALISTA DE TALENTO HUMANO', colaborador: 'MARLON RUIZ', competencia: 'COMPETENCIA 1' },
-  { gerencia: 'GESTION DE CAPITAL HUMANO', area: 'TALENTO Y DESARROLLO HUMANO', puesto: 'ANALISTA DE TALENTO HUMANO', colaborador: 'MARLON RUIZ', competencia: 'COMPETENCIA 2' },
-  { gerencia: 'GESTION DE CAPITAL HUMANO', area: 'TALENTO Y DESARROLLO HUMANO', puesto: 'ANALISTA DE TALENTO HUMANO', colaborador: 'DANIEL DAVILA', competencia: 'COMPETENCIA 1' },
-  { gerencia: 'GESTION DE CAPITAL HUMANO', area: 'TALENTO Y DESARROLLO HUMANO', puesto: 'ANALISTA DE TALENTO HUMANO', colaborador: 'DANIEL DAVILA', competencia: 'COMPETENCIA 2' },
-];
+// Pre-stored template data (Fallback)
+const INITIAL_DATA: EvaluationData[] = [];
 
 const LEVELS = [
   { value: 0, label: 'NIVEL 0', short: 'Desconoce', desc: 'El colaborador desconoce los fundamentos básicos de la competencia.' },
@@ -71,19 +66,14 @@ const LEVELS = [
 
 export default function App() {
   // Auth State
-  const [users, setUsers] = useState<AuthUser[]>(() => {
-    const saved = localStorage.getItem('eval_users');
-    return saved ? JSON.parse(saved) : INITIAL_USERS;
-  });
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loginForm, setLoginForm] = useState({ email: '', password: '' });
   const [loginError, setLoginError] = useState('');
 
   // App State
-  const [data, setData] = useState<EvaluationData[]>(() => {
-    const saved = localStorage.getItem('eval_data');
-    return saved ? JSON.parse(saved) : INITIAL_DATA;
-  });
+  const [data, setData] = useState<EvaluationData[]>([]);
+  const [users, setUsers] = useState<AuthUser[]>(INITIAL_USERS);
+  const [isLoadingExternal, setIsLoadingExternal] = useState(true);
   const [scores, setScores] = useState<ScoreState>(() => {
     const saved = localStorage.getItem('eval_scores');
     return saved ? JSON.parse(saved) : {};
@@ -108,6 +98,75 @@ export default function App() {
     signature: '',
     fullName: '',
   });
+
+  // Fetch External Data from Google Sheets
+  useEffect(() => {
+    const fetchExternalData = async () => {
+      try {
+        setIsLoadingExternal(true);
+        const response = await fetch(APPS_SCRIPT_URL);
+        const result = await response.json();
+        
+        let rawRows: any[] = [];
+        if (Array.isArray(result)) {
+          rawRows = result;
+        } else if (result.data && Array.isArray(result.data)) {
+          rawRows = result.data;
+        }
+
+        if (rawRows.length > 0) {
+          // 1. Map Evaluation Data
+          const mappedData: EvaluationData[] = rawRows
+            .filter(row => row.GERENCIA && row.AREA && row.PUESTO && row.COLABORADOR && row.COMPETENCIA)
+            .map(row => ({
+              gerencia: String(row.GERENCIA).trim(),
+              area: String(row.AREA).trim(),
+              puesto: String(row.PUESTO).trim(),
+              colaborador: String(row.COLABORADOR).trim(),
+              competencia: String(row.COMPETENCIA).trim(),
+            }));
+
+          // 2. Map Users (Evaluators)
+          const mappedUsers: AuthUser[] = [...INITIAL_USERS];
+          const processedEmails = new Set(INITIAL_USERS.map(u => u.email));
+
+          rawRows.forEach(row => {
+            const email = String(row.CORREO || '').trim();
+            const name = String(row['NOMBRE EVALUADOR'] || row.NOMBRE || '').trim();
+            const password = String(row.CONTRASEÑA || row.PASSWORD || '123').trim();
+            const area = String(row.AREA || '').trim();
+
+            if (email && !processedEmails.has(email)) {
+              mappedUsers.push({
+                name: name || email.split('@')[0],
+                email,
+                password,
+                assignedArea: area
+              });
+              processedEmails.add(email);
+            }
+          });
+
+          if (mappedData.length > 0) {
+            setData(mappedData);
+            setUsers(mappedUsers);
+            localStorage.setItem('eval_data', JSON.stringify(mappedData));
+            localStorage.setItem('eval_users', JSON.stringify(mappedUsers));
+          }
+        }
+        setIsLoadingExternal(false);
+      } catch (error) {
+        console.error("Error fetching external data:", error);
+        setIsLoadingExternal(false);
+        const savedData = localStorage.getItem('eval_data');
+        const savedUsers = localStorage.getItem('eval_users');
+        if (savedData) setData(JSON.parse(savedData));
+        if (savedUsers) setUsers(JSON.parse(savedUsers));
+      }
+    };
+
+    fetchExternalData();
+  }, []);
 
   // Auto-lock based on area completion
   useEffect(() => {
@@ -408,6 +467,41 @@ export default function App() {
 
     pdf.save(`Evaluacion_${filters.area}_${user?.name}.pdf`);
 
+    // 3. Send to Google Sheets (Apps Script)
+    try {
+      const payload = {
+        evaluador: user?.name,
+        area: filters.area,
+        fecha: new Date().toLocaleString(),
+        resultados: (Object.entries(dataByPuesto) as [string, { colaboradores: string[], competencias: string[] }][]).flatMap(([puesto, info]) => 
+          info.colaboradores.flatMap(colab => 
+            info.competencias.map(comp => ({
+              gerencia: data.find(d => d.area === filters.area)?.gerencia,
+              area: filters.area,
+              puesto,
+              colaborador: colab,
+              competencia: comp,
+              puntaje: scores[colab]?.[comp] ?? 0,
+              evaluador: user?.name,
+              fecha_evaluacion: new Date().toISOString()
+            }))
+          )
+        )
+      };
+
+      // We use a simple fetch POST. Note: Apps Script requires specific CORS handling or a proxy
+      // but we implement the call as requested.
+      await fetch(APPS_SCRIPT_URL, {
+        method: 'POST',
+        mode: 'no-cors', // Common for Apps Script if not using a proper API
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      console.log("Data sent to Google Sheets successfully");
+    } catch (error) {
+      console.error("Error sending data to Google Sheets:", error);
+    }
+
     setCompletedAreas(prev => [...prev, filters.area]);
     setShowEvidenceModal(false);
     alert("Evaluación finalizada. Se han descargado los archivos Excel y PDF.");
@@ -488,6 +582,17 @@ export default function App() {
   };
 
   // Login Screen
+  if (isLoadingExternal && data.length === 0) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="text-center space-y-4">
+          <RefreshCw className="w-12 h-12 text-[#004a7c] animate-spin mx-auto" />
+          <p className="text-slate-600 font-medium">Cargando datos desde Google Sheets...</p>
+        </div>
+      </div>
+    );
+  }
+
   if (!user) {
     return (
       <div className="min-h-screen bg-[#004a7c] flex items-center justify-center p-4">
