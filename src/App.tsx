@@ -48,7 +48,7 @@ interface AuthUser {
   assignedArea: string;
 }
 
-const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxI6N2RGz8cXG_WSkZ2_ktVX0knKc-kbXFXA1VuMeR6PIsB8UTXu8x4-ZIlw-U9u8ZhYg/exec";
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzEuIQobhqBFdGHZqm5-0hwwmeloAQz9mmYuAYDy3OS2fjqoCq-EjkOtcX5Dv6mTN8XQg/exec";
 
 const INITIAL_USERS: AuthUser[] = [
   { email: 'mruiz@acerosarequipa.com', password: '123', name: 'Administrador', assignedArea: 'ADMIN' },
@@ -102,39 +102,77 @@ export default function App() {
   // Fetch External Data from Google Sheets
   useEffect(() => {
     const fetchExternalData = async () => {
+      const fetchUrl = `${APPS_SCRIPT_URL}${APPS_SCRIPT_URL.includes('?') ? '&' : '?'}sheet=Protocolo_de_evaluación`;
+      console.log("Starting fetch from:", fetchUrl);
       try {
         setIsLoadingExternal(true);
-        const response = await fetch(APPS_SCRIPT_URL);
-        const result = await response.json();
+        const response = await fetch(fetchUrl);
         
-        let rawRows: any[] = [];
-        if (Array.isArray(result)) {
-          rawRows = result;
-        } else if (result.data && Array.isArray(result.data)) {
-          rawRows = result.data;
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
         }
 
-        if (rawRows.length > 0) {
+        const contentType = response.headers.get("content-type");
+        let rawRows: any[] = [];
+
+        if (contentType && contentType.includes("application/json")) {
+          const result = await response.json();
+          console.log("JSON result received:", result);
+          
+          if (Array.isArray(result)) {
+            rawRows = result;
+          } else if (result["Protocolo_de_evaluación"] && Array.isArray(result["Protocolo_de_evaluación"])) {
+            rawRows = result["Protocolo_de_evaluación"];
+          } else if (result.data && Array.isArray(result.data)) {
+            rawRows = result.data;
+          } else {
+            // Try to find any property that is an array
+            const arrayKey = Object.keys(result).find(key => Array.isArray(result[key]));
+            if (arrayKey) {
+              rawRows = result[arrayKey];
+            }
+          }
+        } else {
+          // Fallback to CSV if not JSON
+          const csvText = await response.text();
+          console.log("CSV text received (first 100 chars):", csvText.substring(0, 100));
+          const results = Papa.parse(csvText, { header: true, skipEmptyLines: true });
+          rawRows = results.data;
+        }
+
+        if (rawRows && rawRows.length > 0) {
+          console.log(`Processing ${rawRows.length} rows...`);
+          
+          // Helper to find column value regardless of casing or underscores/spaces
+          const getVal = (row: any, keys: string[]) => {
+            const normalize = (s: string) => s.toUpperCase().trim().replace(/[\s_]/g, '');
+            const normalizedKeys = keys.map(normalize);
+            const foundKey = Object.keys(row).find(k => normalizedKeys.includes(normalize(k)));
+            return foundKey ? String(row[foundKey]).trim() : '';
+          };
+
           // 1. Map Evaluation Data
           const mappedData: EvaluationData[] = rawRows
-            .filter(row => row.GERENCIA && row.AREA && row.PUESTO && row.COLABORADOR && row.COMPETENCIA)
             .map(row => ({
-              gerencia: String(row.GERENCIA).trim(),
-              area: String(row.AREA).trim(),
-              puesto: String(row.PUESTO).trim(),
-              colaborador: String(row.COLABORADOR).trim(),
-              competencia: String(row.COMPETENCIA).trim(),
-            }));
+              gerencia: getVal(row, ['GERENCIA']),
+              area: getVal(row, ['AREA']),
+              puesto: getVal(row, ['PUESTO']),
+              colaborador: getVal(row, ['COLABORADOR']),
+              competencia: getVal(row, ['COMPETENCIA']),
+            }))
+            .filter(d => d.gerencia && d.area && d.puesto && d.colaborador && d.competencia);
+
+          console.log(`Mapped ${mappedData.length} evaluation records.`);
 
           // 2. Map Users (Evaluators)
           const mappedUsers: AuthUser[] = [...INITIAL_USERS];
           const processedEmails = new Set(INITIAL_USERS.map(u => u.email));
 
           rawRows.forEach(row => {
-            const email = String(row.CORREO || '').trim();
-            const name = String(row['NOMBRE EVALUADOR'] || row.NOMBRE || '').trim();
-            const password = String(row.CONTRASEÑA || row.PASSWORD || '123').trim();
-            const area = String(row.AREA || '').trim();
+            const email = getVal(row, ['CORREO', 'EMAIL']);
+            const name = getVal(row, ['NOMBRE EVALUADOR', 'NOMBRE', 'EVALUADOR']);
+            const password = getVal(row, ['CONTRASEÑA', 'PASSWORD', 'CLAVE']) || '123';
+            const area = getVal(row, ['AREA']);
 
             if (email && !processedEmails.has(email)) {
               mappedUsers.push({
@@ -153,15 +191,18 @@ export default function App() {
             localStorage.setItem('eval_data', JSON.stringify(mappedData));
             localStorage.setItem('eval_users', JSON.stringify(mappedUsers));
           }
+        } else {
+          console.warn("No rows found in external data.");
         }
-        setIsLoadingExternal(false);
       } catch (error) {
         console.error("Error fetching external data:", error);
-        setIsLoadingExternal(false);
+        // Fallback to local storage
         const savedData = localStorage.getItem('eval_data');
         const savedUsers = localStorage.getItem('eval_users');
         if (savedData) setData(JSON.parse(savedData));
         if (savedUsers) setUsers(JSON.parse(savedUsers));
+      } finally {
+        setIsLoadingExternal(false);
       }
     };
 
