@@ -106,6 +106,7 @@ export default function App() {
   const [showEvidenceModal, setShowEvidenceModal] = useState(false);
   const [showAddEvaluatorModal, setShowAddEvaluatorModal] = useState(false);
   const [showFormatModal, setShowFormatModal] = useState(false);
+  const [isFinalizing, setIsFinalizing] = useState(false);
   const [selectedAreaForEvaluator, setSelectedAreaForEvaluator] = useState('');
   const [newEvaluator, setNewEvaluator] = useState({ 
     name: '', 
@@ -494,10 +495,12 @@ export default function App() {
     const sigData = signaturePadRef.current?.toDataURL();
     const finalEvidence = { ...evidence, signature: sigData || '' };
     const fechaTermino = new Date().toISOString();
-    const fechaFormateada = new Date().toLocaleDateString().replace(/\//g, '-');
+    
+    setIsFinalizing(true);
 
-    // 1. Prepare Area-Wide Data for Local Downloads (Admins get Excel, Everyone gets PDF)
-    const resultsData: any[] = [];
+    try {
+      // 1. Prepare Area-Wide Data for Local Downloads (Admins get Excel, Everyone gets PDF)
+      const resultsData: any[] = [];
     (Object.entries(dataByPuesto) as [string, { colaboradores: string[], competencias: string[] }][]).forEach(([puesto, info]) => {
       info.colaboradores.forEach(colab => {
         info.competencias.forEach(comp => {
@@ -609,10 +612,9 @@ export default function App() {
     const excelConsolidadoBase64 = XLSX.write(wbConsolidado, { type: 'base64', bookType: 'xlsx' });
 
     // 2. Prepare and Send Individual Data to Apps Script
-    try {
-      const collaborators = Array.from(new Set(
-        (Object.values(dataByPuesto) as { colaboradores: string[] }[]).flatMap(info => info.colaboradores)
-      ));
+    const collaborators = Array.from(new Set(
+      (Object.values(dataByPuesto) as { colaboradores: string[] }[]).flatMap(info => info.colaboradores)
+    ));
 
       for (const colab of collaborators) {
         // Generate Individual PDF
@@ -649,6 +651,26 @@ export default function App() {
         });
       }
 
+      // Final Consolidated Send (Explicitly marked as Consolidado)
+      const finalPayload = {
+        nombreEvaluador: user?.name,
+        colaborador: "CONSOLIDADO_GENERAL",
+        fechaTermino: fechaTermino,
+        pdfBase64: "",
+        excelBase64: "",
+        pdfConsolidadoBase64: pdfConsolidadoBase64,
+        excelConsolidadoBase64: excelConsolidadoBase64,
+        area: filters.area,
+        gerencia: filters.gerencia
+      };
+
+      await fetch(APPS_SCRIPT_URL, {
+        method: 'POST',
+        mode: 'no-cors',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify(finalPayload)
+      });
+
       alert("¡Evaluación guardada exitosamente!");
       
       // Limpiar formulario y estado
@@ -664,6 +686,8 @@ export default function App() {
       alert("Evaluación finalizada localmente, pero hubo un problema al conectar con el servidor para el guardado automático.");
       setCompletedAreas(prev => [...prev, filters.area]);
       setShowEvidenceModal(false);
+    } finally {
+      setIsFinalizing(false);
     }
   };
 
@@ -1393,9 +1417,19 @@ export default function App() {
                 </button>
                 <button 
                   onClick={finalizeEvaluation}
-                  className="px-8 py-3 bg-emerald-600 text-white font-bold rounded-xl hover:bg-emerald-700 shadow-lg shadow-emerald-900/20 transition-all"
+                  disabled={isFinalizing}
+                  className={`px-8 py-3 text-white font-bold rounded-xl shadow-lg transition-all flex items-center gap-2 ${
+                    isFinalizing ? 'bg-slate-400 cursor-not-allowed' : 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-900/20'
+                  }`}
                 >
-                  Finalizar
+                  {isFinalizing ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      Guardando...
+                    </>
+                  ) : (
+                    'Finalizar'
+                  )}
                 </button>
               </div>
             </motion.div>
