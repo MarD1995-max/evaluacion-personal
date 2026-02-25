@@ -46,13 +46,15 @@ interface AuthUser {
   password: string;
   name: string;
   assignedArea: string;
+  assignedGerencia?: string;
+  role: 'ADMINISTRADOR' | 'EVALUADOR';
 }
 
 const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzEuIQobhqBFdGHZqm5-0hwwmeloAQz9mmYuAYDy3OS2fjqoCq-EjkOtcX5Dv6mTN8XQg/exec";
 const FALLBACK_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQ5g0DjdNowSGHn1ITl9e73QP6Axq56uQzfmMYBTIFS7rpsTxn4TR_9kP4CoLUZCA/pub?output=csv";
 
 const INITIAL_USERS: AuthUser[] = [
-  { email: 'mruiz@acerosarequipa.com', password: '123', name: 'Administrador', assignedArea: 'ADMIN' },
+  { email: 'mruiz@acerosarequipa.com', password: '123', name: 'Administrador', assignedArea: 'ADMIN', role: 'ADMINISTRADOR' },
 ];
 
 // Pre-stored template data (Fallback)
@@ -67,15 +69,18 @@ const LEVELS = [
 
 export default function App() {
   // Auth State
-  const [user, setUser] = useState<AuthUser | null>(null);
+  const [user, setUser] = useState<AuthUser | null>(() => {
+    const saved = localStorage.getItem('eval_current_user');
+    return saved ? JSON.parse(saved) : null;
+  });
   const [loginForm, setLoginForm] = useState({ email: '', password: '' });
   const [loginError, setLoginError] = useState('');
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
 
   // App State
   const [data, setData] = useState<EvaluationData[]>([]);
   const [users, setUsers] = useState<AuthUser[]>(INITIAL_USERS);
   const [isLoadingExternal, setIsLoadingExternal] = useState(true);
-  const [fetchError, setFetchError] = useState<string | null>(null);
   const [scores, setScores] = useState<ScoreState>(() => {
     const saved = localStorage.getItem('eval_scores');
     return saved ? JSON.parse(saved) : {};
@@ -94,7 +99,13 @@ export default function App() {
   const [showAddEvaluatorModal, setShowAddEvaluatorModal] = useState(false);
   const [showFormatModal, setShowFormatModal] = useState(false);
   const [selectedAreaForEvaluator, setSelectedAreaForEvaluator] = useState('');
-  const [newEvaluator, setNewEvaluator] = useState({ name: '', email: '', password: '' });
+  const [newEvaluator, setNewEvaluator] = useState({ 
+    name: '', 
+    email: '', 
+    password: '',
+    gerencia: '',
+    area: ''
+  });
   const [evidence, setEvidence] = useState({
     photo: '',
     signature: '',
@@ -106,7 +117,6 @@ export default function App() {
     const fetchExternalData = async () => {
       const fetchUrl = `${APPS_SCRIPT_URL}${APPS_SCRIPT_URL.includes('?') ? '&' : '?'}sheet=Protocolo_de_evaluación`;
       console.log("Starting fetch from:", fetchUrl);
-      setFetchError(null);
       
       try {
         setIsLoadingExternal(true);
@@ -159,7 +169,8 @@ export default function App() {
           
           // Helper to find column value regardless of casing, underscores, spaces or accents
           const normalize = (s: string) => 
-            s.toUpperCase()
+            String(s || '')
+             .toLowerCase()
              .normalize("NFD")
              .replace(/[\u0300-\u036f]/g, "")
              .trim()
@@ -171,55 +182,56 @@ export default function App() {
             return foundKey ? String(row[foundKey]).trim() : '';
           };
 
-          // 1. Map Evaluation Data
+          // 1. Map Evaluation Data with intelligent mapping
           const mappedData: EvaluationData[] = rawRows
             .map(row => ({
-              gerencia: getVal(row, ['GERENCIA']),
-              area: getVal(row, ['AREA']),
-              puesto: getVal(row, ['PUESTO']),
-              colaborador: getVal(row, ['COLABORADOR']),
-              competencia: getVal(row, ['COMPETENCIA']),
+              gerencia: getVal(row, ['gerencia', 'gerencias', 'management']),
+              area: getVal(row, ['area', 'areas', 'area', 'department', 'unidad']),
+              puesto: getVal(row, ['puesto', 'puestos', 'cargo', 'position', 'rol']),
+              colaborador: getVal(row, ['colaborador', 'colaboradores', 'nombres', 'nombre', 'empleado', 'worker', 'personal']),
+              competencia: getVal(row, ['competencia', 'competencias', 'habilidad', 'item', 'skill', 'criterio']),
             }))
-            .filter(d => d.gerencia && d.area && d.puesto && d.colaborador && d.competencia);
+            .filter(d => d.gerencia || d.area || d.puesto || d.colaborador);
 
           console.log(`Mapped ${mappedData.length} evaluation records.`);
 
           // 2. Map Users (Evaluators)
           const mappedUsers: AuthUser[] = [...INITIAL_USERS];
-          const processedEmails = new Set(INITIAL_USERS.map(u => u.email));
+          const processedEmails = new Set(INITIAL_USERS.map(u => u.email.toLowerCase()));
 
           rawRows.forEach(row => {
-            const email = getVal(row, ['CORREO', 'EMAIL']);
-            const name = getVal(row, ['NOMBRE EVALUADOR', 'NOMBRE', 'EVALUADOR']);
-            const password = getVal(row, ['CONTRASEÑA', 'PASSWORD', 'CLAVE']) || '123';
-            const area = getVal(row, ['AREA']);
+            const email = getVal(row, ['correo', 'email', 'mail']).toLowerCase();
+            const name = getVal(row, ['nombre evaluador', 'nombre', 'evaluador', 'nombres']);
+            const password = getVal(row, ['contraseña', 'password', 'clave', 'pass']) || '123';
+            const area = getVal(row, ['area', 'areas']);
+            const gerencia = getVal(row, ['gerencia', 'gerencias']);
 
             if (email && !processedEmails.has(email)) {
               mappedUsers.push({
                 name: name || email.split('@')[0],
                 email,
                 password,
-                assignedArea: area
+                assignedArea: area,
+                assignedGerencia: gerencia,
+                role: email === 'mruiz@acerosarequipa.com' ? 'ADMINISTRADOR' : 'EVALUADOR'
               });
               processedEmails.add(email);
             }
           });
 
+          // Force update state even if some data is missing
           if (mappedData.length > 0) {
             setData(mappedData);
             setUsers(mappedUsers);
             localStorage.setItem('eval_data', JSON.stringify(mappedData));
             localStorage.setItem('eval_users', JSON.stringify(mappedUsers));
-          } else {
-            setFetchError("No se encontraron datos válidos en la hoja 'Protocolo_de_evaluación'. Verifique los nombres de las columnas.");
+            console.log("Global state updated with fresh data.");
           }
         } else {
           console.warn("No rows found in external data.");
-          setFetchError("La respuesta de Google Sheets está vacía o no tiene el formato esperado.");
         }
       } catch (error: any) {
         console.error("Error fetching external data:", error);
-        setFetchError(`Error de conexión: ${error.message || 'Error desconocido'}. Asegúrese de que el script esté publicado correctamente.`);
         
         // Fallback to local storage
         const savedData = localStorage.getItem('eval_data');
@@ -275,57 +287,62 @@ export default function App() {
   }, [showEvidenceModal]);
 
   // Auth Handlers
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    const found = users.find(u => u.email === loginForm.email && u.password === loginForm.password);
-    if (found) {
-      setUser(found);
-      setLoginError('');
-      
-      // Auto-filter based on user's assigned area (if not admin)
-      if (found.assignedArea !== 'ADMIN') {
-        const userAreaMatch = data.find(d => d.area === found.assignedArea);
-        if (userAreaMatch) {
-          setFilters({
-            gerencia: userAreaMatch.gerencia,
-            area: userAreaMatch.area,
-            puesto: userAreaMatch.puesto,
-          });
+    setIsLoggingIn(true);
+    setLoginError('');
+
+    try {
+      // Find user in the pre-fetched users list
+      const authUser = users.find(u => u.email.toLowerCase() === loginForm.email.toLowerCase());
+
+      if (authUser) {
+        if (authUser.password === loginForm.password) {
+          setUser(authUser);
+          localStorage.setItem('eval_current_user', JSON.stringify(authUser));
+          
+          // Reset filters on login to show all options initially
+          setFilters({ gerencia: '', area: '', puesto: '' });
+        } else {
+          setLoginError('Contraseña incorrecta');
         }
-        // Check if area is already completed
-        if (completedAreas.includes(found.assignedArea)) {
-          setIsLocked(true);
-        }
+      } else {
+        setLoginError('Usuario no encontrado');
       }
-    } else {
-      setLoginError('Credenciales incorrectas');
+    } catch (error: any) {
+      console.error("Login error:", error);
+      setLoginError(`Error: ${error.message || 'Error desconocido'}`);
+    } finally {
+      setIsLoggingIn(false);
     }
   };
 
   const handleLogout = () => {
     setUser(null);
+    localStorage.removeItem('eval_current_user');
     setLoginForm({ email: '', password: '' });
     setIsLocked(false);
     setShowEvidenceModal(false);
     setFilters({ gerencia: '', area: '', puesto: '' });
   };
 
-  // Filter Options (Restricted by User Role)
+  // Filter Options (Total access as requested)
   const filteredData = useMemo(() => {
     if (!user) return [];
-    if (user.assignedArea === 'ADMIN') return data;
-    return data.filter(d => d.area === user.assignedArea);
+    // Reverting to total load: no filtering by user's assigned area/gerencia
+    return data;
   }, [data, user]);
 
   const gerencias = useMemo(() => Array.from(new Set(filteredData.map(d => d.gerencia))), [filteredData]);
-  const areas = useMemo(() => 
-    Array.from(new Set(filteredData.filter(d => d.gerencia === filters.gerencia).map(d => d.area))), 
-    [filteredData, filters.gerencia]
-  );
-  const puestos = useMemo(() => 
-    Array.from(new Set(filteredData.filter(d => d.gerencia === filters.gerencia && d.area === filters.area).map(d => d.puesto))), 
-    [filteredData, filters.gerencia, filters.area]
-  );
+  const areas = useMemo(() => {
+    if (!filters.gerencia) return [];
+    return Array.from(new Set(filteredData.filter(d => d.gerencia === filters.gerencia).map(d => d.area)));
+  }, [filteredData, filters.gerencia]);
+
+  const puestos = useMemo(() => {
+    if (!filters.area) return [];
+    return Array.from(new Set(filteredData.filter(d => d.gerencia === filters.gerencia && d.area === filters.area).map(d => d.puesto)));
+  }, [filteredData, filters.gerencia, filters.area]);
 
   // Table Data
   const dataByPuesto = useMemo<{ [puesto: string]: { colaboradores: string[], competencias: string[] } }>(() => {
@@ -536,7 +553,9 @@ export default function App() {
     // 3. Send to Google Sheets (Apps Script)
     try {
       const payload = {
+        tipo: "EVALUACION",
         evaluador: user?.name,
+        email_evaluador: user?.email,
         area: filters.area,
         fecha: new Date().toLocaleString(),
         resultados: (Object.entries(dataByPuesto) as [string, { colaboradores: string[], competencias: string[] }][]).flatMap(([puesto, info]) => 
@@ -552,14 +571,17 @@ export default function App() {
               fecha_evaluacion: new Date().toISOString()
             }))
           )
-        )
+        ),
+        evidencia: {
+          nombre: finalEvidence.fullName,
+          foto: finalEvidence.photo,
+          firma: finalEvidence.signature
+        }
       };
 
-      // We use a simple fetch POST. Note: Apps Script requires specific CORS handling or a proxy
-      // but we implement the call as requested.
       await fetch(APPS_SCRIPT_URL, {
         method: 'POST',
-        mode: 'no-cors', // Common for Apps Script if not using a proper API
+        mode: 'no-cors',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
@@ -627,24 +649,41 @@ export default function App() {
     e.target.value = '';
   };
 
-  const handleAddEvaluator = (e: React.FormEvent) => {
+  const handleAddEvaluator = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newEvaluator.name || !newEvaluator.email || !newEvaluator.password) {
+    if (!newEvaluator.name || !newEvaluator.email || !newEvaluator.password || !newEvaluator.gerencia || !newEvaluator.area) {
       alert("Por favor complete todos los campos.");
       return;
     }
 
-    const newUser: AuthUser = {
-      name: newEvaluator.name,
-      email: newEvaluator.email,
-      password: newEvaluator.password,
-      assignedArea: selectedAreaForEvaluator
-    };
+    try {
+      const payload = {
+        tipo: "NUEVO_EVALUADOR",
+        nombre: newEvaluator.name,
+        correo: newEvaluator.email,
+        password: newEvaluator.password,
+        gerencia: newEvaluator.gerencia,
+        area: newEvaluator.area
+      };
 
-    setUsers(prev => [...prev, newUser]);
-    setShowAddEvaluatorModal(false);
-    setNewEvaluator({ name: '', email: '', password: '' });
-    alert(`Evaluador ${newUser.name} agregado correctamente para el área ${selectedAreaForEvaluator}`);
+      const response = await fetch(APPS_SCRIPT_URL, {
+        method: 'POST',
+        mode: 'no-cors', // Apps Script often requires no-cors for simple POSTs
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      // Since we use no-cors, we can't check response.ok, but we assume success if no error
+      alert(`Evaluador ${newEvaluator.name} solicitado correctamente.`);
+      setShowAddEvaluatorModal(false);
+      setNewEvaluator({ name: '', email: '', password: '', gerencia: '', area: '' });
+      
+      // Refresh data to see new evaluator
+      window.location.reload();
+    } catch (error) {
+      console.error("Error adding evaluator:", error);
+      alert("Error al agregar evaluador.");
+    }
   };
 
   // Login Screen
@@ -652,33 +691,11 @@ export default function App() {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
         <div className="text-center space-y-6 max-w-md">
-          {fetchError ? (
-            <motion.div 
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="bg-white p-8 rounded-3xl shadow-xl border border-red-100 space-y-4"
-            >
-              <div className="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center mx-auto text-red-500">
-                <AlertTriangle size={32} />
-              </div>
-              <h2 className="text-xl font-bold text-slate-800">Error de Conexión</h2>
-              <p className="text-slate-600 text-sm leading-relaxed">
-                {fetchError}
-              </p>
-              <button 
-                onClick={() => window.location.reload()}
-                className="w-full py-3 bg-[#004a7c] text-white font-bold rounded-xl hover:bg-[#003a63] transition-all"
-              >
-                Reintentar Conexión
-              </button>
-            </motion.div>
-          ) : (
-            <div className="space-y-4">
-              <RefreshCw className="w-12 h-12 text-[#004a7c] animate-spin mx-auto" />
-              <p className="text-slate-600 font-medium">Sincronizando con Google Sheets...</p>
-              <p className="text-slate-400 text-xs">Obteniendo Protocolo de Evaluación</p>
-            </div>
-          )}
+          <div className="space-y-4">
+            <RefreshCw className="w-12 h-12 text-[#004a7c] animate-spin mx-auto" />
+            <p className="text-slate-600 font-medium">Sincronizando con Google Sheets...</p>
+            <p className="text-slate-400 text-xs">Obteniendo Protocolo de Evaluación</p>
+          </div>
         </div>
       </div>
     );
@@ -739,9 +756,16 @@ export default function App() {
 
             <button 
               type="submit"
-              className="w-full py-3 bg-[#004a7c] text-white font-bold rounded-xl hover:bg-[#003a63] transition-colors shadow-lg shadow-blue-900/20"
+              disabled={isLoggingIn}
+              className="w-full py-3 bg-[#004a7c] text-white font-bold rounded-xl hover:bg-[#003a63] transition-colors shadow-lg shadow-blue-900/20 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
-              Iniciar Sesión
+              {isLoggingIn ? (
+                <>
+                  <RefreshCw className="animate-spin" size={18} /> Validando...
+                </>
+              ) : (
+                'Iniciar Sesión'
+              )}
             </button>
           </form>
 
@@ -771,6 +795,14 @@ export default function App() {
           </div>
           
           <div className="flex items-center gap-3">
+            {user.role === 'ADMINISTRADOR' && (
+              <button 
+                onClick={() => setShowAddEvaluatorModal(true)}
+                className="flex items-center gap-2 px-4 py-2 bg-slate-800 text-white font-bold rounded-xl hover:bg-slate-900 transition-colors shadow-lg shadow-slate-900/20"
+              >
+                <ShieldCheck size={18} /> Administración
+              </button>
+            )}
             {!isLocked && (
               <button 
                 onClick={handleSave}
@@ -839,7 +871,7 @@ export default function App() {
                   <select 
                     value={filters.area}
                     onChange={(e) => setFilters(f => ({ ...f, area: e.target.value, puesto: '' }))}
-                    disabled={isLocked && user.assignedArea !== 'ADMIN'}
+                    disabled={isLocked}
                     className="w-full appearance-none bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#004a7c]/20 focus:border-[#004a7c] transition-all disabled:opacity-50"
                   >
                     <option value="">Seleccionar Área</option>
@@ -847,7 +879,7 @@ export default function App() {
                   </select>
                   <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={16} />
                 </div>
-                {user.assignedArea === 'ADMIN' && filters.area && (
+                {user.role === 'ADMINISTRADOR' && filters.area && (
                   <div className="flex gap-2">
                     <button 
                       onClick={() => { setSelectedAreaForEvaluator(filters.area); setShowAddEvaluatorModal(true); }}
@@ -877,7 +909,7 @@ export default function App() {
           </div>
 
           {/* Admin Upload Button */}
-          {user.assignedArea === 'ADMIN' && (
+          {user.role === 'ADMINISTRADOR' && (
             <div className="flex justify-end gap-3">
               <button 
                 onClick={() => setShowFormatModal(true)}
@@ -1077,48 +1109,86 @@ export default function App() {
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.9 }}
-              className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden"
+              className="bg-white w-full max-w-lg rounded-3xl shadow-2xl overflow-hidden"
             >
-              <div className="bg-[#004a7c] p-6 text-white">
+              <div className="bg-[#004a7c] p-6 text-white flex items-center justify-between">
                 <h2 className="text-xl font-bold flex items-center gap-2">
-                  <User size={24} /> Agregar Evaluador
+                  <User size={24} /> Agregar Nuevo Evaluador
                 </h2>
-                <p className="text-blue-100 text-sm mt-1">Área: {selectedAreaForEvaluator}</p>
+                <button onClick={() => setShowAddEvaluatorModal(false)} className="text-white/60 hover:text-white">
+                  <LogOut size={20} />
+                </button>
               </div>
-              <form onSubmit={handleAddEvaluator} className="p-8 space-y-6">
+              
+              <form onSubmit={handleAddEvaluator} className="p-8 space-y-4">
                 <div className="space-y-2">
-                  <label className="text-sm font-bold text-slate-700">Nombres Completos</label>
+                  <label className="text-sm font-bold text-slate-700">Nombre Completo</label>
                   <input 
                     type="text"
                     required
                     value={newEvaluator.name}
                     onChange={e => setNewEvaluator(p => ({ ...p, name: e.target.value }))}
                     className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-[#004a7c]/20 outline-none"
-                    placeholder="Ej: Juan Perez"
+                    placeholder="Ej: Juan Pérez"
                   />
                 </div>
-                <div className="space-y-2">
-                  <label className="text-sm font-bold text-slate-700">Correo Corporativo</label>
-                  <input 
-                    type="email"
-                    required
-                    value={newEvaluator.email}
-                    onChange={e => setNewEvaluator(p => ({ ...p, email: e.target.value }))}
-                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-[#004a7c]/20 outline-none"
-                    placeholder="ejemplo@acerosarequipa.com"
-                  />
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <label className="text-sm font-bold text-slate-700">Correo Electrónico</label>
+                    <input 
+                      type="email"
+                      required
+                      value={newEvaluator.email}
+                      onChange={e => setNewEvaluator(p => ({ ...p, email: e.target.value }))}
+                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-[#004a7c]/20 outline-none"
+                      placeholder="ejemplo@acerosarequipa.com"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-bold text-slate-700">Contraseña</label>
+                    <input 
+                      type="password"
+                      required
+                      value={newEvaluator.password}
+                      onChange={e => setNewEvaluator(p => ({ ...p, password: e.target.value }))}
+                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-[#004a7c]/20 outline-none"
+                      placeholder="••••••••"
+                    />
+                  </div>
                 </div>
-                <div className="space-y-2">
-                  <label className="text-sm font-bold text-slate-700">Contraseña</label>
-                  <input 
-                    type="password"
-                    required
-                    value={newEvaluator.password}
-                    onChange={e => setNewEvaluator(p => ({ ...p, password: e.target.value }))}
-                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-[#004a7c]/20 outline-none"
-                    placeholder="••••••••"
-                  />
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <label className="text-sm font-bold text-slate-700">Gerencia</label>
+                    <select 
+                      required
+                      value={newEvaluator.gerencia}
+                      onChange={e => setNewEvaluator(p => ({ ...p, gerencia: e.target.value }))}
+                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-[#004a7c]/20 outline-none"
+                    >
+                      <option value="">Seleccionar Gerencia</option>
+                      {Array.from(new Set(data.map(d => d.gerencia))).map(g => (
+                        <option key={g} value={g}>{g}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-bold text-slate-700">Área</label>
+                    <select 
+                      required
+                      value={newEvaluator.area}
+                      onChange={e => setNewEvaluator(p => ({ ...p, area: e.target.value }))}
+                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-[#004a7c]/20 outline-none"
+                    >
+                      <option value="">Seleccionar Área</option>
+                      {Array.from(new Set(data.filter(d => d.gerencia === newEvaluator.gerencia).map(d => d.area))).map(a => (
+                        <option key={a} value={a}>{a}</option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
+
                 <div className="flex justify-end gap-3 pt-4">
                   <button 
                     type="button"
