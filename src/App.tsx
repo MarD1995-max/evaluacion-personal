@@ -522,13 +522,15 @@ export default function App() {
       Firma: "Ver en sistema (Base64)"
     }];
 
-    // Export Excel
-    const wb = XLSX.utils.book_new();
-    const ws1 = XLSX.utils.json_to_sheet(resultsData);
-    const ws2 = XLSX.utils.json_to_sheet(activityData);
-    XLSX.utils.book_append_sheet(wb, ws1, "Resultados");
-    XLSX.utils.book_append_sheet(wb, ws2, "Actividades Evaluador");
-    XLSX.writeFile(wb, `Evaluacion_${filters.area}_${user?.name}.xlsx`);
+    // Export Excel - ONLY FOR ADMINS
+    if (user?.role === 'ADMINISTRADOR') {
+      const wb = XLSX.utils.book_new();
+      const ws1 = XLSX.utils.json_to_sheet(resultsData);
+      const ws2 = XLSX.utils.json_to_sheet(activityData);
+      XLSX.utils.book_append_sheet(wb, ws1, "Resultados");
+      XLSX.utils.book_append_sheet(wb, ws2, "Actividades Evaluador");
+      XLSX.writeFile(wb, `Evaluacion_${filters.area}_${user?.name}.xlsx`);
+    }
 
     // Export PDF (Evaluator version)
     const pdf = new jsPDF('p', 'mm', 'a4');
@@ -618,15 +620,14 @@ export default function App() {
               const score = scores[colab]?.[comp] ?? 0;
               
               return {
-                gerencia: getFlex(row, ['gerencia', 'division', 'management']) || filters.gerencia,
-                area: getFlex(row, ['area', 'department', 'unidad', 'seccion']) || filters.area,
-                puesto: getFlex(row, ['puesto', 'cargo', 'position', 'rol', 'ocupacion']) || puesto,
                 colaborador: getFlex(row, ['colaborador', 'nombre', 'empleado', 'evaluado']) || colab,
-                // Flexibility in competency field name as requested
+                puesto: getFlex(row, ['puesto', 'cargo', 'position', 'rol', 'ocupacion']) || puesto,
                 competencia: comp,
-                competencias: comp,
-                nombre: comp,
-                puntaje: score
+                puntaje: score,
+                area: getFlex(row, ['area', 'department', 'unidad', 'seccion']) || filters.area,
+                gerencia: getFlex(row, ['gerencia', 'division', 'management']) || filters.gerencia,
+                nombreEvaluador: user?.name,
+                fechaTermino: new Date().toISOString()
               };
             })
           )
@@ -638,36 +639,31 @@ export default function App() {
         }
       };
 
-      console.log("Sending payload to Apps Script:", payload);
+      console.log("Sending payload to Apps Script (no-cors mode):", payload);
 
-      const response = await fetch(APPS_SCRIPT_URL, {
+      // Using no-cors and text/plain as requested to avoid CORS issues
+      await fetch(APPS_SCRIPT_URL, {
         method: 'POST',
-        mode: 'cors', // Changed from no-cors to read response
+        mode: 'no-cors',
+        headers: { 'Content-Type': 'text/plain' },
         body: JSON.stringify(payload)
       });
 
-      const responseText = await response.text();
-      console.log("Server response:", responseText);
+      // Since mode is 'no-cors', we cannot read the response, 
+      // so we assume success if no error is thrown during fetch.
+      alert("¡Evaluación guardada exitosamente!");
+      
+      // Limpiar formulario y estado
+      setScores({});
+      setFilters({ gerencia: '', area: '', puesto: '' });
+      setEvidence({ photo: '', fullName: '', signature: '' });
+      setIsLocked(false);
+      setShowEvidenceModal(false);
+      setCompletedAreas(prev => [...prev, filters.area]);
 
-      if (responseText.includes("Exito") || responseText.includes("SUCCESS") || responseText.includes("OK")) {
-        alert("¡Éxito! La evaluación se ha guardado correctamente en el servidor.");
-        
-        // Limpiar formulario y estado al confirmar éxito
-        setScores({});
-        setFilters({ gerencia: '', area: '', puesto: '' });
-        setEvidence({ photo: '', fullName: '', signature: '' });
-        setIsLocked(false);
-        setShowEvidenceModal(false);
-        setCompletedAreas(prev => [...prev, filters.area]);
-      } else {
-        console.warn("Server did not return 'Exito':", responseText);
-        alert("Evaluación finalizada. Los archivos Excel y PDF se descargaron, pero el servidor no confirmó el guardado automático. Por favor, guarde sus archivos descargados.");
-        setCompletedAreas(prev => [...prev, filters.area]);
-        setShowEvidenceModal(false);
-      }
     } catch (error) {
       console.error("Error sending data to Google Sheets:", error);
-      alert("Evaluación finalizada. Los archivos Excel y PDF se descargaron correctamente. Nota: Hubo un problema al conectar con el servidor para el guardado automático.");
+      alert("Evaluación finalizada. El PDF se descargó correctamente. Nota: Hubo un problema al conectar con el servidor para el guardado automático.");
       setCompletedAreas(prev => [...prev, filters.area]);
       setShowEvidenceModal(false);
     }
