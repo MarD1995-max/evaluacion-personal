@@ -55,6 +55,14 @@ const FALLBACK_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQ5g0D
 
 const INITIAL_USERS: AuthUser[] = [
   { email: 'mruiz@acerosarequipa.com', password: '123', name: 'Administrador', assignedArea: 'ADMIN', role: 'ADMINISTRADOR' },
+  { 
+    email: 'cjimener@acerosarequipa.com', 
+    password: '123', 
+    name: 'Carlos Jimenez', 
+    assignedArea: 'Laboratorio Químico', 
+    assignedGerencia: 'Metalurgia',
+    role: 'EVALUADOR' 
+  },
 ];
 
 // Pre-stored template data (Fallback)
@@ -184,13 +192,23 @@ export default function App() {
 
           // 1. Map Evaluation Data with intelligent mapping
           const mappedData: EvaluationData[] = rawRows
-            .map(row => ({
-              gerencia: getVal(row, ['gerencia', 'gerencias', 'management']),
-              area: getVal(row, ['area', 'areas', 'area', 'department', 'unidad']),
-              puesto: getVal(row, ['puesto', 'puestos', 'cargo', 'position', 'rol']),
-              colaborador: getVal(row, ['colaborador', 'colaboradores', 'nombres', 'nombre', 'empleado', 'worker', 'personal']),
-              competencia: getVal(row, ['competencia', 'competencias', 'habilidad', 'item', 'skill', 'criterio']),
-            }))
+            .map((row, index) => {
+              const gerencia = getVal(row, ['gerencia', 'gerencias', 'management', 'division']);
+              const area = getVal(row, ['area', 'areas', 'department', 'unidad', 'seccion']);
+              const puesto = getVal(row, ['puesto', 'puestos', 'cargo', 'position', 'rol', 'ocupacion']);
+              const colaborador = getVal(row, ['colaborador', 'colaboradores', 'nombres', 'nombre', 'empleado', 'worker', 'personal', 'evaluado']);
+              const competencia = getVal(row, [
+                'competencia', 'competencias', 'habilidad', 'item', 'skill', 'criterio', 
+                'competencia tecnica', 'competencias tecnicas', 'tecnica', 'tecnicas',
+                'competencia especifica', 'competencias especificas'
+              ]);
+
+              if (index === 0) {
+                console.log("First row mapping preview:", { gerencia, area, puesto, colaborador, competencia });
+              }
+
+              return { gerencia, area, puesto, colaborador, competencia };
+            })
             .filter(d => d.gerencia || d.area || d.puesto || d.colaborador);
 
           console.log(`Mapped ${mappedData.length} evaluation records.`);
@@ -326,12 +344,38 @@ export default function App() {
     setFilters({ gerencia: '', area: '', puesto: '' });
   };
 
-  // Filter Options (Total access as requested)
+  // Filter Options
+  // IMPORTANT: The ADMINISTRADOR role (e.g., mruiz@acerosarequipa.com) MUST always visualize ALL information.
+  // EVALUADORES (non-admins) are restricted to their assigned Gerencia and Area.
   const filteredData = useMemo(() => {
     if (!user) return [];
-    // Reverting to total load: no filtering by user's assigned area/gerencia
+    
+    // Admin always sees everything (Total access)
+    if (user.role === 'ADMINISTRADOR') {
+      return data;
+    }
+    
+    // Evaluators only see their assigned data
+    if (user.role === 'EVALUADOR' && user.assignedGerencia && user.assignedArea) {
+      return data.filter(d => 
+        d.gerencia === user.assignedGerencia && 
+        d.area === user.assignedArea
+      );
+    }
+    
     return data;
   }, [data, user]);
+
+  // Auto-select filters for Evaluators
+  useEffect(() => {
+    if (user && user.role === 'EVALUADOR' && user.assignedGerencia && user.assignedArea) {
+      setFilters(prev => ({
+        ...prev,
+        gerencia: user.assignedGerencia || '',
+        area: user.assignedArea || ''
+      }));
+    }
+  }, [user]);
 
   const gerencias = useMemo(() => Array.from(new Set(filteredData.map(d => d.gerencia))), [filteredData]);
   const areas = useMemo(() => {
@@ -626,14 +670,39 @@ export default function App() {
       const ws = wb.Sheets[wsname];
       const rawData = XLSX.utils.sheet_to_json(ws);
       
-      // Map raw data to EvaluationData interface
-      const mappedData: EvaluationData[] = rawData.map((row: any) => ({
-        gerencia: String(row.GERENCIA || row.Gerencia || '').trim(),
-        area: String(row.AREA || row.Area || '').trim(),
-        puesto: String(row.PUESTO || row.Puesto || '').trim(),
-        colaborador: String(row.COLABORADOR || row.Colaborador || '').trim(),
-        competencia: String(row.COMPETENCIA || row.Competencia || '').trim(),
-      })).filter(d => d.gerencia && d.area && d.puesto && d.colaborador && d.competencia);
+      // Helper to find column value regardless of casing, underscores, spaces or accents
+      const normalize = (s: string) => 
+        String(s || '')
+         .toLowerCase()
+         .normalize("NFD")
+         .replace(/[\u0300-\u036f]/g, "")
+         .trim()
+         .replace(/[\s_]/g, '');
+
+      const getVal = (row: any, keys: string[]) => {
+        const normalizedKeys = keys.map(normalize);
+        const foundKey = Object.keys(row).find(k => normalizedKeys.includes(normalize(k)));
+        return foundKey ? String(row[foundKey]).trim() : '';
+      };
+
+      // Map raw data to EvaluationData interface with flexible mapping
+      const mappedData: EvaluationData[] = rawData.map((row: any, index: number) => {
+        const gerencia = getVal(row, ['gerencia', 'gerencias', 'management', 'division']);
+        const area = getVal(row, ['area', 'areas', 'department', 'unidad', 'seccion']);
+        const puesto = getVal(row, ['puesto', 'puestos', 'cargo', 'position', 'rol', 'ocupacion']);
+        const colaborador = getVal(row, ['colaborador', 'colaboradores', 'nombres', 'nombre', 'empleado', 'worker', 'personal', 'evaluado']);
+        const competencia = getVal(row, [
+          'competencia', 'competencias', 'habilidad', 'item', 'skill', 'criterio', 
+          'competencia tecnica', 'competencias tecnicas', 'tecnica', 'tecnicas',
+          'competencia especifica', 'competencias especificas'
+        ]);
+
+        if (index === 0) {
+          console.log("Manual upload first row mapping preview:", { gerencia, area, puesto, colaborador, competencia });
+        }
+
+        return { gerencia, area, puesto, colaborador, competencia };
+      }).filter(d => d.gerencia || d.area || d.puesto || d.colaborador);
 
       if (mappedData.length > 0) {
         setData(mappedData);
@@ -852,7 +921,7 @@ export default function App() {
                 <select 
                   value={filters.gerencia}
                   onChange={(e) => setFilters(f => ({ ...f, gerencia: e.target.value, area: '', puesto: '' }))}
-                  disabled={isLocked}
+                  disabled={isLocked || user.role === 'EVALUADOR'}
                   className="w-full appearance-none bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#004a7c]/20 focus:border-[#004a7c] transition-all disabled:opacity-50"
                 >
                   <option value="">Seleccionar Gerencia</option>
@@ -871,7 +940,7 @@ export default function App() {
                   <select 
                     value={filters.area}
                     onChange={(e) => setFilters(f => ({ ...f, area: e.target.value, puesto: '' }))}
-                    disabled={isLocked}
+                    disabled={isLocked || user.role === 'EVALUADOR'}
                     className="w-full appearance-none bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#004a7c]/20 focus:border-[#004a7c] transition-all disabled:opacity-50"
                   >
                     <option value="">Seleccionar Área</option>
@@ -944,7 +1013,7 @@ export default function App() {
                       <thead>
                         <tr className="bg-slate-50 text-slate-600 border-b border-slate-200">
                           <th className="p-4 text-left text-xs font-bold uppercase tracking-wider border-r border-slate-200 min-w-[250px]">
-                            Competencias
+                            Competencias Técnicas
                           </th>
                           {info.colaboradores.map(colab => (
                             <th key={colab} className="p-4 text-center text-xs font-bold uppercase tracking-wider border-r border-slate-200 min-w-[150px]">
@@ -1081,11 +1150,11 @@ export default function App() {
                     <div className="w-2 h-2 bg-[#004a7c] rounded-full" /> COLABORADOR
                   </div>
                   <div className="flex items-center gap-2 text-sm font-bold text-slate-700">
-                    <div className="w-2 h-2 bg-[#004a7c] rounded-full" /> COMPETENCIA
+                    <div className="w-2 h-2 bg-[#004a7c] rounded-full" /> COMPETENCIA (o Competencia Técnica)
                   </div>
                 </div>
                 <p className="text-xs text-slate-400 italic">
-                  * El orden de las columnas no importa, pero los nombres deben coincidir exactamente.
+                  * El sistema es flexible con los nombres de las columnas (pueden estar en mayúsculas, minúsculas o con tildes).
                 </p>
                 <div className="flex justify-end pt-4">
                   <button 
