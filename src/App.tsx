@@ -493,8 +493,10 @@ export default function App() {
 
     const sigData = signaturePadRef.current?.toDataURL();
     const finalEvidence = { ...evidence, signature: sigData || '' };
+    const fechaTermino = new Date().toISOString();
+    const fechaFormateada = new Date().toLocaleDateString().replace(/\//g, '-');
 
-    // Prepare Excel Data
+    // 1. Prepare Area-Wide Data for Local Downloads (Admins get Excel, Everyone gets PDF)
     const resultsData: any[] = [];
     (Object.entries(dataByPuesto) as [string, { colaboradores: string[], competencias: string[] }][]).forEach(([puesto, info]) => {
       info.colaboradores.forEach(colab => {
@@ -522,135 +524,120 @@ export default function App() {
       Firma: "Ver en sistema (Base64)"
     }];
 
-    // Export Excel - ONLY FOR ADMINS
+    // Export Excel - ONLY FOR ADMINS (Area-wide summary)
     if (user?.role === 'ADMINISTRADOR') {
       const wb = XLSX.utils.book_new();
       const ws1 = XLSX.utils.json_to_sheet(resultsData);
       const ws2 = XLSX.utils.json_to_sheet(activityData);
       XLSX.utils.book_append_sheet(wb, ws1, "Resultados");
       XLSX.utils.book_append_sheet(wb, ws2, "Actividades Evaluador");
-      XLSX.writeFile(wb, `Evaluacion_${filters.area}_${user?.name}.xlsx`);
+      XLSX.writeFile(wb, `Resumen_Evaluacion_${filters.area}_${user?.name}.xlsx`);
     }
 
-    // Export PDF (Evaluator version)
-    const pdf = new jsPDF('p', 'mm', 'a4');
-    pdf.setFontSize(18);
-    pdf.text("Resumen de Evaluación de Competencias", 20, 20);
-    pdf.setFontSize(12);
-    pdf.text(`Evaluador: ${user?.name}`, 20, 30);
-    pdf.text(`Área: ${filters.area}`, 20, 37);
-    pdf.text(`Fecha: ${new Date().toLocaleString()}`, 20, 44);
+    // Export PDF (Area-wide summary for local download)
+    const areaPdf = new jsPDF('p', 'mm', 'a4');
+    const generatePdfContent = (pdf: jsPDF, targetColab?: string) => {
+      pdf.setFontSize(18);
+      pdf.text("Resumen de Evaluación de Competencias", 20, 20);
+      pdf.setFontSize(12);
+      pdf.text(`Evaluador: ${user?.name}`, 20, 30);
+      pdf.text(`Área: ${filters.area}`, 20, 37);
+      pdf.text(`Fecha: ${new Date().toLocaleString()}`, 20, 44);
 
-    let y = 60;
-
-    // Add Photo if exists
-    if (finalEvidence.photo) {
-      try {
-        pdf.addImage(finalEvidence.photo, 'JPEG', 140, 25, 50, 35);
-        pdf.setFontSize(8);
-        pdf.text("Foto de Validación", 140, 63);
-        pdf.setFontSize(12);
-      } catch (e) {
-        console.error("Error adding photo to PDF", e);
+      let y = 60;
+      if (finalEvidence.photo) {
+        try {
+          pdf.addImage(finalEvidence.photo, 'JPEG', 140, 25, 50, 35);
+          pdf.setFontSize(8);
+          pdf.text("Foto de Validación", 140, 63);
+          pdf.setFontSize(12);
+        } catch (e) { console.error("Error adding photo", e); }
       }
-    }
 
-    (Object.entries(dataByPuesto) as [string, { colaboradores: string[], competencias: string[] }][]).forEach(([puesto, info]) => {
-      pdf.setFont("helvetica", "bold");
-      pdf.text(`Puesto: ${puesto}`, 20, y);
-      y += 8;
-      
-      info.colaboradores.forEach(colab => {
-        const pct = calculatePercentage(colab, info.competencias);
+      (Object.entries(dataByPuesto) as [string, { colaboradores: string[], competencias: string[] }][]).forEach(([puesto, info]) => {
+        const colabsToProcess = targetColab ? info.colaboradores.filter(c => c === targetColab) : info.colaboradores;
+        if (colabsToProcess.length === 0) return;
+
         pdf.setFont("helvetica", "bold");
-        pdf.text(`${colab}: ${pct}% (${getStatus(pct).label})`, 25, y);
-        y += 6;
+        pdf.text(`Puesto: ${puesto}`, 20, y);
+        y += 8;
         
-        // Detailed scores
-        pdf.setFont("helvetica", "italic");
-        pdf.setFontSize(10);
-        info.competencias.forEach(comp => {
-          const score = scores[colab]?.[comp] ?? 0;
-          pdf.text(`- ${comp}: Nivel ${score}`, 30, y);
+        colabsToProcess.forEach(colab => {
+          const pct = calculatePercentage(colab, info.competencias);
+          pdf.setFont("helvetica", "bold");
+          pdf.text(`${colab}: ${pct}% (${getStatus(pct).label})`, 25, y);
+          y += 6;
+          
+          pdf.setFont("helvetica", "italic");
+          pdf.setFontSize(10);
+          info.competencias.forEach(comp => {
+            const score = scores[colab]?.[comp] ?? 0;
+            pdf.text(`- ${comp}: Nivel ${score}`, 30, y);
+            y += 5;
+            if (y > 270) { pdf.addPage(); y = 20; }
+          });
+          pdf.setFontSize(12);
           y += 5;
           if (y > 270) { pdf.addPage(); y = 20; }
         });
-        pdf.setFontSize(12);
         y += 5;
         if (y > 270) { pdf.addPage(); y = 20; }
       });
-      y += 5;
-      if (y > 270) { pdf.addPage(); y = 20; }
-    });
 
-    if (finalEvidence.signature) {
-      if (y > 220) { pdf.addPage(); y = 20; }
-      y += 10;
-      pdf.setFont("helvetica", "bold");
-      pdf.text("Evidencia de Firma:", 20, y);
-      y += 5;
-      pdf.addImage(finalEvidence.signature, 'PNG', 20, y, 60, 30);
-      y += 35;
-      pdf.text(`Nombre: ${finalEvidence.fullName}`, 20, y);
-    }
+      if (finalEvidence.signature) {
+        if (y > 220) { pdf.addPage(); y = 20; }
+        y += 10;
+        pdf.setFont("helvetica", "bold");
+        pdf.text("Evidencia de Firma:", 20, y);
+        y += 5;
+        pdf.addImage(finalEvidence.signature, 'PNG', 20, y, 60, 30);
+        y += 35;
+        pdf.text(`Nombre: ${finalEvidence.fullName}`, 20, y);
+      }
+      return pdf;
+    };
 
-    pdf.save(`Evaluacion_${filters.area}_${user?.name}.pdf`);
+    generatePdfContent(areaPdf).save(`Evaluacion_${filters.area}_${user?.name}.pdf`);
 
-    // 3. Send to Google Sheets (Apps Script)
+    // 2. Prepare and Send Individual Data to Apps Script
     try {
-      // Helper for flexible mapping within the payload construction
-      const getFlex = (obj: any, keys: string[]) => {
-        const norm = (s: string) => String(s || '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().replace(/[\s_]/g, '');
-        const nKeys = keys.map(norm);
-        const found = Object.keys(obj).find(k => nKeys.includes(norm(k)));
-        return found ? obj[found] : undefined;
-      };
+      const collaborators = Array.from(new Set(
+        (Object.values(dataByPuesto) as { colaboradores: string[] }[]).flatMap(info => info.colaboradores)
+      ));
 
-      const payload = {
-        tipo: "EVALUACION",
-        nombreEvaluador: user?.name,
-        emailEvaluador: user?.email,
-        area: filters.area,
-        gerencia: filters.gerencia,
-        fechaTermino: new Date().toISOString(),
-        detalles: (Object.entries(dataByPuesto) as [string, { colaboradores: string[], competencias: string[] }][]).flatMap(([puesto, info]) => 
-          info.colaboradores.flatMap(colab => 
-            info.competencias.map(comp => {
-              const row = data.find(d => d.colaborador === colab && d.puesto === puesto) || {};
-              const score = scores[colab]?.[comp] ?? 0;
-              
-              return {
-                colaborador: getFlex(row, ['colaborador', 'nombre', 'empleado', 'evaluado']) || colab,
-                puesto: getFlex(row, ['puesto', 'cargo', 'position', 'rol', 'ocupacion']) || puesto,
-                competencia: comp,
-                puntaje: score,
-                area: getFlex(row, ['area', 'department', 'unidad', 'seccion']) || filters.area,
-                gerencia: getFlex(row, ['gerencia', 'division', 'management']) || filters.gerencia,
-                nombreEvaluador: user?.name,
-                fechaTermino: new Date().toISOString()
-              };
-            })
-          )
-        ),
-        evidencia: {
-          nombre: finalEvidence.fullName,
-          foto: finalEvidence.photo,
-          firma: finalEvidence.signature
-        }
-      };
+      for (const colab of collaborators) {
+        // Generate Individual PDF
+        const individualPdf = new jsPDF('p', 'mm', 'a4');
+        generatePdfContent(individualPdf, colab);
+        const pdfBase64 = individualPdf.output('datauristring').split(',')[1];
 
-      console.log("Sending payload to Apps Script (no-cors mode):", payload);
+        // Generate Individual Excel
+        const colabResults = resultsData.filter(d => d.Colaborador === colab);
+        const wb = XLSX.utils.book_new();
+        const ws = XLSX.utils.json_to_sheet(colabResults);
+        XLSX.utils.book_append_sheet(wb, ws, "Resultados");
+        const excelBase64 = XLSX.write(wb, { type: 'base64', bookType: 'xlsx' });
 
-      // Using no-cors and text/plain as requested to avoid CORS issues
-      await fetch(APPS_SCRIPT_URL, {
-        method: 'POST',
-        mode: 'no-cors',
-        headers: { 'Content-Type': 'text/plain' },
-        body: JSON.stringify(payload)
-      });
+        const payload = {
+          nombreEvaluador: user?.name,
+          colaborador: colab,
+          fechaTermino: fechaTermino,
+          pdfBase64: pdfBase64,
+          excelBase64: excelBase64,
+          area: filters.area,
+          gerencia: filters.gerencia
+        };
 
-      // Since mode is 'no-cors', we cannot read the response, 
-      // so we assume success if no error is thrown during fetch.
+        console.log(`Sending data for ${colab} to Apps Script...`);
+        
+        await fetch(APPS_SCRIPT_URL, {
+          method: 'POST',
+          mode: 'no-cors',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify(payload)
+        });
+      }
+
       alert("¡Evaluación guardada exitosamente!");
       
       // Limpiar formulario y estado
@@ -663,7 +650,7 @@ export default function App() {
 
     } catch (error) {
       console.error("Error sending data to Google Sheets:", error);
-      alert("Evaluación finalizada. El PDF se descargó correctamente. Nota: Hubo un problema al conectar con el servidor para el guardado automático.");
+      alert("Evaluación finalizada localmente, pero hubo un problema al conectar con el servidor para el guardado automático.");
       setCompletedAreas(prev => [...prev, filters.area]);
       setShowEvidenceModal(false);
     }
