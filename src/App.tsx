@@ -596,24 +596,39 @@ export default function App() {
 
     // 3. Send to Google Sheets (Apps Script)
     try {
+      // Helper for flexible mapping within the payload construction
+      const getFlex = (obj: any, keys: string[]) => {
+        const norm = (s: string) => String(s || '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().replace(/[\s_]/g, '');
+        const nKeys = keys.map(norm);
+        const found = Object.keys(obj).find(k => nKeys.includes(norm(k)));
+        return found ? obj[found] : undefined;
+      };
+
       const payload = {
         tipo: "EVALUACION",
-        evaluador: user?.name,
-        email_evaluador: user?.email,
+        nombreEvaluador: user?.name,
+        emailEvaluador: user?.email,
         area: filters.area,
-        fecha: new Date().toLocaleString(),
-        resultados: (Object.entries(dataByPuesto) as [string, { colaboradores: string[], competencias: string[] }][]).flatMap(([puesto, info]) => 
+        gerencia: filters.gerencia,
+        fechaTermino: new Date().toISOString(),
+        detalles: (Object.entries(dataByPuesto) as [string, { colaboradores: string[], competencias: string[] }][]).flatMap(([puesto, info]) => 
           info.colaboradores.flatMap(colab => 
-            info.competencias.map(comp => ({
-              gerencia: data.find(d => d.area === filters.area)?.gerencia,
-              area: filters.area,
-              puesto,
-              colaborador: colab,
-              competencia: comp,
-              puntaje: scores[colab]?.[comp] ?? 0,
-              evaluador: user?.name,
-              fecha_evaluacion: new Date().toISOString()
-            }))
+            info.competencias.map(comp => {
+              const row = data.find(d => d.colaborador === colab && d.puesto === puesto) || {};
+              const score = scores[colab]?.[comp] ?? 0;
+              
+              return {
+                gerencia: getFlex(row, ['gerencia', 'division', 'management']) || filters.gerencia,
+                area: getFlex(row, ['area', 'department', 'unidad', 'seccion']) || filters.area,
+                puesto: getFlex(row, ['puesto', 'cargo', 'position', 'rol', 'ocupacion']) || puesto,
+                colaborador: getFlex(row, ['colaborador', 'nombre', 'empleado', 'evaluado']) || colab,
+                // Flexibility in competency field name as requested
+                competencia: comp,
+                competencias: comp,
+                nombre: comp,
+                puntaje: score
+              };
+            })
           )
         ),
         evidencia: {
@@ -623,20 +638,39 @@ export default function App() {
         }
       };
 
-      await fetch(APPS_SCRIPT_URL, {
+      console.log("Sending payload to Apps Script:", payload);
+
+      const response = await fetch(APPS_SCRIPT_URL, {
         method: 'POST',
-        mode: 'no-cors',
-        headers: { 'Content-Type': 'application/json' },
+        mode: 'cors', // Changed from no-cors to read response
         body: JSON.stringify(payload)
       });
-      console.log("Data sent to Google Sheets successfully");
+
+      const responseText = await response.text();
+      console.log("Server response:", responseText);
+
+      if (responseText.includes("Exito") || responseText.includes("SUCCESS") || responseText.includes("OK")) {
+        alert("¡Éxito! La evaluación se ha guardado correctamente en el servidor.");
+        
+        // Limpiar formulario y estado al confirmar éxito
+        setScores({});
+        setFilters({ gerencia: '', area: '', puesto: '' });
+        setEvidence({ photo: '', fullName: '', signature: '' });
+        setIsLocked(false);
+        setShowEvidenceModal(false);
+        setCompletedAreas(prev => [...prev, filters.area]);
+      } else {
+        console.warn("Server did not return 'Exito':", responseText);
+        alert("Evaluación finalizada. Los archivos Excel y PDF se descargaron, pero el servidor no confirmó el guardado automático. Por favor, guarde sus archivos descargados.");
+        setCompletedAreas(prev => [...prev, filters.area]);
+        setShowEvidenceModal(false);
+      }
     } catch (error) {
       console.error("Error sending data to Google Sheets:", error);
+      alert("Evaluación finalizada. Los archivos Excel y PDF se descargaron correctamente. Nota: Hubo un problema al conectar con el servidor para el guardado automático.");
+      setCompletedAreas(prev => [...prev, filters.area]);
+      setShowEvidenceModal(false);
     }
-
-    setCompletedAreas(prev => [...prev, filters.area]);
-    setShowEvidenceModal(false);
-    alert("Evaluación finalizada. Se han descargado los archivos Excel y PDF.");
   };
 
   const handleRefreshArea = (areaName: string) => {
