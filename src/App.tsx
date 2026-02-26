@@ -628,7 +628,18 @@ export default function App() {
       return pdf;
     };
 
+    // Populate consolidated PDF
+    generatePdfContent(areaPdf);
+    const pdfConsolidadoBase64 = areaPdf.output('datauristring').split(',')[1];
     areaPdf.save(`Evaluacion_${filters.area}_${user?.name}.pdf`);
+
+    // Generate Consolidated Excel Base64
+    const wbConsolidado = XLSX.utils.book_new();
+    const wsCons1 = XLSX.utils.json_to_sheet(resultsData);
+    const wsCons2 = XLSX.utils.json_to_sheet(activityData);
+    XLSX.utils.book_append_sheet(wbConsolidado, wsCons1, "Resultados");
+    XLSX.utils.book_append_sheet(wbConsolidado, wsCons2, "Actividades Evaluador");
+    const excelConsolidadoBase64 = XLSX.write(wbConsolidado, { type: 'base64', bookType: 'xlsx' });
 
     // 2. Prepare and Send Individual Data to Apps Script
     const collaborators = Array.from(new Set(
@@ -654,6 +665,8 @@ export default function App() {
         fechaTermino: fechaTermino,
         pdfBase64: pdfBase64,
         excelBase64: excelBase64,
+        pdfConsolidadoBase64: pdfConsolidadoBase64,
+        excelConsolidadoBase64: excelConsolidadoBase64,
         area: filters.area,
         gerencia: filters.gerencia
       };
