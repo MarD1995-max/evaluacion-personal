@@ -312,25 +312,56 @@ export default function App() {
     setLoginError('');
 
     try {
-      // Find user in the pre-fetched users list
-      const authUser = users.find(u => u.email.toLowerCase() === loginForm.email.toLowerCase());
+      // 1. Hardcoded Admin Check
+      if (loginForm.email.toLowerCase() === 'mruiz@acerosarequipa.com' && loginForm.password === '123') {
+        const adminUser: AuthUser = {
+          email: 'mruiz@acerosarequipa.com',
+          password: '123',
+          name: 'Administrador',
+          assignedArea: 'ADMIN',
+          role: 'ADMINISTRADOR'
+        };
+        setUser(adminUser);
+        localStorage.setItem('eval_current_user', JSON.stringify(adminUser));
+        setFilters({ gerencia: '', area: '', puesto: '' });
+        return;
+      }
 
-      if (authUser) {
-        if (authUser.password === loginForm.password) {
-          setUser(authUser);
-          localStorage.setItem('eval_current_user', JSON.stringify(authUser));
-          
-          // Reset filters on login to show all options initially
-          setFilters({ gerencia: '', area: '', puesto: '' });
-        } else {
-          setLoginError('Contraseña incorrecta');
-        }
+      // 2. Evaluator Check (Fetch from Apps Script)
+      const response = await fetch(APPS_SCRIPT_URL + "?action=getEvaluadores");
+      if (!response.ok) throw new Error("Error al obtener evaluadores del servidor");
+      
+      const evaluadores = await response.json();
+      
+      const found = evaluadores.find((ev: any) => 
+        ev.correo.toLowerCase() === loginForm.email.toLowerCase() && 
+        String(ev.password) === loginForm.password
+      );
+
+      if (found) {
+        const evalUser: AuthUser = {
+          email: found.correo,
+          password: found.password,
+          name: found.nombre,
+          assignedArea: found.area,
+          assignedGerencia: found.gerencia,
+          role: 'EVALUADOR'
+        };
+        setUser(evalUser);
+        localStorage.setItem('eval_current_user', JSON.stringify(evalUser));
+        
+        // Pre-set filters for the evaluator
+        setFilters({ 
+          gerencia: found.gerencia || '', 
+          area: found.area || '', 
+          puesto: '' 
+        });
       } else {
-        setLoginError('Usuario no encontrado');
+        setLoginError('Credenciales inválidas');
       }
     } catch (error: any) {
       console.error("Login error:", error);
-      setLoginError(`Error: ${error.message || 'Error desconocido'}`);
+      setLoginError(`Error de conexión: ${error.message || 'Error desconocido'}`);
     } finally {
       setIsLoggingIn(false);
     }
@@ -356,15 +387,12 @@ export default function App() {
       return data;
     }
     
-    // Evaluators only see their assigned data
-    if (user.role === 'EVALUADOR' && user.assignedGerencia && user.assignedArea) {
-      return data.filter(d => 
-        d.gerencia === user.assignedGerencia && 
-        d.area === user.assignedArea
-      );
+    // Evaluators only see their assigned data (Filtered by Area)
+    if (user.role === 'EVALUADOR' && user.assignedArea) {
+      return data.filter(d => d.area === user.assignedArea);
     }
     
-    return data;
+    return [];
   }, [data, user]);
 
   // Auto-select filters for Evaluators
