@@ -502,7 +502,27 @@ export default function App() {
   const capturePhoto = () => {
     const imageSrc = webcamRef.current?.getScreenshot();
     if (imageSrc) {
-      setEvidence(prev => ({ ...prev, photo: imageSrc }));
+      // Image Compression: Max 800px width, 0.7 quality
+      const img = new Image();
+      img.src = imageSrc;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const MAX_WIDTH = 800;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > MAX_WIDTH) {
+          height *= MAX_WIDTH / width;
+          width = MAX_WIDTH;
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx?.drawImage(img, 0, 0, width, height);
+        const compressedBase64 = canvas.toDataURL('image/jpeg', 0.7);
+        setEvidence(prev => ({ ...prev, photo: compressedBase64 }));
+      };
     }
   };
 
@@ -555,18 +575,14 @@ export default function App() {
       Firma: "Ver en sistema (Base64)"
     }];
 
-    // Export Excel - ONLY FOR ADMINS (Area-wide summary)
-    if (user?.role === 'ADMINISTRADOR') {
-      const wb = XLSX.utils.book_new();
-      const ws1 = XLSX.utils.json_to_sheet(resultsData);
-      const ws2 = XLSX.utils.json_to_sheet(activityData);
-      XLSX.utils.book_append_sheet(wb, ws1, "Resultados");
-      XLSX.utils.book_append_sheet(wb, ws2, "Actividades Evaluador");
-      XLSX.writeFile(wb, `Resumen_Evaluacion_${filters.area}_${user?.name}.xlsx`);
-    }
+    // Export PDF (Area-wide summary)
+    const areaPdf = new jsPDF({
+      orientation: 'p',
+      unit: 'mm',
+      format: 'a4',
+      compress: true
+    });
 
-    // Export PDF (Area-wide summary for local download)
-    const areaPdf = new jsPDF('p', 'mm', 'a4');
     const generatePdfContent = (pdf: jsPDF, targetColab?: string) => {
       pdf.setFontSize(18);
       pdf.text("Resumen de Evaluación de Competencias", 20, 20);
@@ -631,7 +647,6 @@ export default function App() {
     // Populate consolidated PDF
     generatePdfContent(areaPdf);
     const pdfConsolidadoBase64 = areaPdf.output('datauristring').split(',')[1];
-    areaPdf.save(`Evaluacion_${filters.area}_${user?.name}.pdf`);
 
     // Generate Consolidated Excel Base64
     const wbConsolidado = XLSX.utils.book_new();
@@ -646,9 +661,15 @@ export default function App() {
       (Object.values(dataByPuesto) as { colaboradores: string[] }[]).flatMap(info => info.colaboradores)
     ));
 
+    // PRIORITIZE SERVER SENDING
     for (const colab of collaborators) {
       // Generate Individual PDF
-      const individualPdf = new jsPDF('p', 'mm', 'a4');
+      const individualPdf = new jsPDF({
+        orientation: 'p',
+        unit: 'mm',
+        format: 'a4',
+        compress: true
+      });
       generatePdfContent(individualPdf, colab);
       const pdfBase64 = individualPdf.output('datauristring').split(',')[1];
 
@@ -679,6 +700,18 @@ export default function App() {
         headers: { 'Content-Type': 'text/plain' },
         body: JSON.stringify(payload)
       });
+    }
+
+    // LOCAL DOWNLOADS AFTER SERVER SENDING
+    areaPdf.save(`Evaluacion_${filters.area}_${user?.name}.pdf`);
+
+    if (user?.role === 'ADMINISTRADOR') {
+      const wb = XLSX.utils.book_new();
+      const ws1 = XLSX.utils.json_to_sheet(resultsData);
+      const ws2 = XLSX.utils.json_to_sheet(activityData);
+      XLSX.utils.book_append_sheet(wb, ws1, "Resultados");
+      XLSX.utils.book_append_sheet(wb, ws2, "Actividades Evaluador");
+      XLSX.writeFile(wb, `Resumen_Evaluacion_${filters.area}_${user?.name}.xlsx`);
     }
 
     alert("¡Evaluación guardada exitosamente!");
