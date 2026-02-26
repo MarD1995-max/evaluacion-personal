@@ -600,78 +600,47 @@ export default function App() {
       return pdf;
     };
 
-    const pdfConsolidadoBase64 = generatePdfContent(areaPdf).output('datauristring').split(',')[1];
     areaPdf.save(`Evaluacion_${filters.area}_${user?.name}.pdf`);
-
-    // Generate Consolidated Excel Base64
-    const wbConsolidado = XLSX.utils.book_new();
-    const wsCons1 = XLSX.utils.json_to_sheet(resultsData);
-    const wsCons2 = XLSX.utils.json_to_sheet(activityData);
-    XLSX.utils.book_append_sheet(wbConsolidado, wsCons1, "Resultados");
-    XLSX.utils.book_append_sheet(wbConsolidado, wsCons2, "Actividades Evaluador");
-    const excelConsolidadoBase64 = XLSX.write(wbConsolidado, { type: 'base64', bookType: 'xlsx' });
 
     // 2. Prepare and Send Individual Data to Apps Script
     const collaborators = Array.from(new Set(
       (Object.values(dataByPuesto) as { colaboradores: string[] }[]).flatMap(info => info.colaboradores)
     ));
 
-      for (const colab of collaborators) {
-        // Generate Individual PDF
-        const individualPdf = new jsPDF('p', 'mm', 'a4');
-        generatePdfContent(individualPdf, colab);
-        const pdfBase64 = individualPdf.output('datauristring').split(',')[1];
+    for (const colab of collaborators) {
+      // Generate Individual PDF
+      const individualPdf = new jsPDF('p', 'mm', 'a4');
+      generatePdfContent(individualPdf, colab);
+      const pdfBase64 = individualPdf.output('datauristring').split(',')[1];
 
-        // Generate Individual Excel
-        const colabResults = resultsData.filter(d => d.Colaborador === colab);
-        const wb = XLSX.utils.book_new();
-        const ws = XLSX.utils.json_to_sheet(colabResults);
-        XLSX.utils.book_append_sheet(wb, ws, "Resultados");
-        const excelBase64 = XLSX.write(wb, { type: 'base64', bookType: 'xlsx' });
+      // Generate Individual Excel
+      const colabResults = resultsData.filter(d => d.Colaborador === colab);
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.json_to_sheet(colabResults);
+      XLSX.utils.book_append_sheet(wb, ws, "Resultados");
+      const excelBase64 = XLSX.write(wb, { type: 'base64', bookType: 'xlsx' });
 
-        const payload = {
-          nombreEvaluador: user?.name,
-          colaborador: colab,
-          fechaTermino: fechaTermino,
-          pdfBase64: pdfBase64,
-          excelBase64: excelBase64,
-          pdfConsolidadoBase64: pdfConsolidadoBase64,
-          excelConsolidadoBase64: excelConsolidadoBase64,
-          area: filters.area,
-          gerencia: filters.gerencia
-        };
-
-        console.log(`Sending data for ${colab} to Apps Script (including consolidated files)...`);
-        
-        await fetch(APPS_SCRIPT_URL, {
-          method: 'POST',
-          mode: 'no-cors',
-          headers: { 'Content-Type': 'text/plain' },
-          body: JSON.stringify(payload)
-        });
-      }
-
-      // Final Consolidated Send (Explicitly marked as Consolidado)
-      const finalPayload = {
+      const payload = {
         nombreEvaluador: user?.name,
-        colaborador: "CONSOLIDADO_GENERAL",
+        colaborador: colab,
         fechaTermino: fechaTermino,
-        pdfBase64: "",
-        excelBase64: "",
-        pdfConsolidadoBase64: pdfConsolidadoBase64,
-        excelConsolidadoBase64: excelConsolidadoBase64,
+        pdfBase64: pdfBase64,
+        excelBase64: excelBase64,
         area: filters.area,
         gerencia: filters.gerencia
       };
 
+      console.log(`Sending data for ${colab} to Apps Script...`);
+      
       await fetch(APPS_SCRIPT_URL, {
         method: 'POST',
         mode: 'no-cors',
         headers: { 'Content-Type': 'text/plain' },
-        body: JSON.stringify(finalPayload)
+        body: JSON.stringify(payload)
       });
+    }
 
-      alert("¡Evaluación guardada exitosamente!");
+    alert("¡Evaluación guardada exitosamente!");
       
       // Limpiar formulario y estado
       setScores({});
@@ -787,23 +756,35 @@ export default function App() {
         area: newEvaluator.area
       };
 
+      console.log("Enviando nuevo evaluador:", payload);
+
       const response = await fetch(APPS_SCRIPT_URL, {
         method: 'POST',
-        mode: 'no-cors', // Apps Script often requires no-cors for simple POSTs
-        headers: { 'Content-Type': 'application/json' },
+        mode: 'cors', // Permite leer la respuesta si doOptions está configurado
+        headers: { 'Content-Type': 'text/plain' }, // Evita preflight CORS
         body: JSON.stringify(payload)
       });
 
-      // Since we use no-cors, we can't check response.ok, but we assume success if no error
-      alert(`Evaluador ${newEvaluator.name} solicitado correctamente.`);
-      setShowAddEvaluatorModal(false);
-      setNewEvaluator({ name: '', email: '', password: '', gerencia: '', area: '' });
-      
-      // Refresh data to see new evaluator
-      window.location.reload();
+      const responseText = await response.text();
+      console.log("Respuesta del servidor:", responseText);
+
+      if (responseText.includes("Ok") || responseText.includes("SUCCESS") || responseText.includes("OK")) {
+        alert("Evaluador guardado correctamente");
+        setShowAddEvaluatorModal(false);
+        setNewEvaluator({ name: '', email: '', password: '', gerencia: '', area: '' });
+        
+        // Refresh data to see new evaluator
+        window.location.reload();
+      } else {
+        // Si no dice "Ok", pero no hubo error de red, informamos al usuario
+        console.warn("La respuesta no fue 'Ok':", responseText);
+        alert("El servidor recibió la solicitud pero no confirmó el guardado. Por favor, verifique en la hoja de cálculo.");
+        setShowAddEvaluatorModal(false);
+        setNewEvaluator({ name: '', email: '', password: '', gerencia: '', area: '' });
+      }
     } catch (error) {
-      console.error("Error adding evaluator:", error);
-      alert("Error al agregar evaluador.");
+      console.error("Error al guardar evaluador:", error);
+      alert("Hubo un error al conectar con el servidor. Por favor, intente nuevamente.");
     }
   };
 
