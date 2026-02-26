@@ -583,7 +583,7 @@ export default function App() {
       compress: true
     });
 
-    const generatePdfContent = (pdf: jsPDF, targetColab?: string) => {
+    const generatePdfContent = (pdf: jsPDF) => {
       pdf.setFontSize(18);
       pdf.text("Resumen de Evaluación de Competencias", 20, 20);
       pdf.setFontSize(12);
@@ -602,7 +602,7 @@ export default function App() {
       }
 
       (Object.entries(dataByPuesto) as [string, { colaboradores: string[], competencias: string[] }][]).forEach(([puesto, info]) => {
-        const colabsToProcess = targetColab ? info.colaboradores.filter(c => c === targetColab) : info.colaboradores;
+        const colabsToProcess = info.colaboradores;
         if (colabsToProcess.length === 0) return;
 
         pdf.setFont("helvetica", "bold");
@@ -656,51 +656,24 @@ export default function App() {
     XLSX.utils.book_append_sheet(wbConsolidado, wsCons2, "Actividades Evaluador");
     const excelConsolidadoBase64 = XLSX.write(wbConsolidado, { type: 'base64', bookType: 'xlsx' });
 
-    // 2. Prepare and Send Individual Data to Apps Script
-    const collaborators = Array.from(new Set(
-      (Object.values(dataByPuesto) as { colaboradores: string[] }[]).flatMap(info => info.colaboradores)
-    ));
+    // 2. Enviar UN SOLO paquete con los datos consolidados a Apps Script
+    const payload = {
+      nombreEvaluador: user?.name,
+      fechaTermino: fechaTermino,
+      pdfConsolidadoBase64: pdfConsolidadoBase64,
+      excelConsolidadoBase64: excelConsolidadoBase64,
+      area: filters.area,
+      gerencia: filters.gerencia
+    };
 
-    // PRIORITIZE SERVER SENDING
-    for (const colab of collaborators) {
-      // Generate Individual PDF
-      const individualPdf = new jsPDF({
-        orientation: 'p',
-        unit: 'mm',
-        format: 'a4',
-        compress: true
-      });
-      generatePdfContent(individualPdf, colab);
-      const pdfBase64 = individualPdf.output('datauristring').split(',')[1];
-
-      // Generate Individual Excel
-      const colabResults = resultsData.filter(d => d.Colaborador === colab);
-      const wb = XLSX.utils.book_new();
-      const ws = XLSX.utils.json_to_sheet(colabResults);
-      XLSX.utils.book_append_sheet(wb, ws, "Resultados");
-      const excelBase64 = XLSX.write(wb, { type: 'base64', bookType: 'xlsx' });
-
-      const payload = {
-        nombreEvaluador: user?.name,
-        colaborador: colab,
-        fechaTermino: fechaTermino,
-        pdfBase64: pdfBase64,
-        excelBase64: excelBase64,
-        pdfConsolidadoBase64: pdfConsolidadoBase64,
-        excelConsolidadoBase64: excelConsolidadoBase64,
-        area: filters.area,
-        gerencia: filters.gerencia
-      };
-
-      console.log(`Sending data for ${colab} to Apps Script...`);
-      
-      await fetch(APPS_SCRIPT_URL, {
-        method: 'POST',
-        mode: 'no-cors',
-        headers: { 'Content-Type': 'text/plain' },
-        body: JSON.stringify(payload)
-      });
-    }
+    console.log(`Enviando archivos consolidados de ${filters.area} a Apps Script...`);
+    
+    await fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      mode: 'no-cors',
+      headers: { 'Content-Type': 'text/plain' },
+      body: JSON.stringify(payload)
+    });
 
     // LOCAL DOWNLOADS AFTER SERVER SENDING
     areaPdf.save(`Evaluacion_${filters.area}_${user?.name}.pdf`);
