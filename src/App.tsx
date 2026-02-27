@@ -41,6 +41,12 @@ interface ScoreState {
   };
 }
 
+interface AreaStatus {
+  gerencia: string;
+  area: string;
+  status: string;
+}
+
 interface AuthUser {
   email: string;
   password: string;
@@ -93,9 +99,12 @@ export default function App() {
     const saved = localStorage.getItem('eval_scores');
     return saved ? JSON.parse(saved) : {};
   });
-  const [completedAreas, setCompletedAreas] = useState<string[]>(() => {
+  const [completedAreas, setCompletedAreas] = useState<AreaStatus[]>(() => {
     const saved = localStorage.getItem('eval_completed_areas');
     return saved ? JSON.parse(saved) : [];
+  });
+  const [evaluationStartTime, setEvaluationStartTime] = useState<string>(() => {
+    return localStorage.getItem('eval_start_time') || '';
   });
   const [filters, setFilters] = useState({
     gerencia: '',
@@ -123,6 +132,23 @@ export default function App() {
 
   // Fetch External Data from Google Sheets
   useEffect(() => {
+    const fetchStatus = async () => {
+      try {
+        const response = await fetch(APPS_SCRIPT_URL + '?action=getStatus');
+        if (response.ok) {
+          const result = await response.json();
+          if (Array.isArray(result)) {
+            setCompletedAreas(result);
+            localStorage.setItem('eval_completed_areas', JSON.stringify(result));
+          }
+        }
+      } catch (error) {
+        console.error("Error fetching status:", error);
+      }
+    };
+
+    fetchStatus();
+
     const fetchExternalData = async () => {
       const fetchUrl = `${APPS_SCRIPT_URL}${APPS_SCRIPT_URL.includes('?') ? '&' : '?'}sheet=Protocolo_de_evaluación`;
       console.log("Starting fetch from:", fetchUrl);
@@ -321,6 +347,9 @@ export default function App() {
           assignedArea: 'ADMIN',
           role: 'ADMINISTRADOR'
         };
+        const startTime = new Date().toLocaleString();
+        setEvaluationStartTime(startTime);
+        localStorage.setItem('eval_start_time', startTime);
         setUser(adminUser);
         localStorage.setItem('eval_current_user', JSON.stringify(adminUser));
         setFilters({ gerencia: '', area: '', puesto: '' });
@@ -347,6 +376,9 @@ export default function App() {
           assignedGerencia: found.gerencia,
           role: 'EVALUADOR'
         };
+        const startTime = new Date().toLocaleString();
+        setEvaluationStartTime(startTime);
+        localStorage.setItem('eval_start_time', startTime);
         setUser(evalUser);
         localStorage.setItem('eval_current_user', JSON.stringify(evalUser));
         
@@ -437,8 +469,13 @@ export default function App() {
     return grouped;
   }, [filteredData, filters.area]);
 
+  const isAreaCompleted = useMemo(() => {
+    if (user?.email === 'mruiz@acerosarequipa.com') return false;
+    return completedAreas.some(ca => ca.area === filters.area && ca.status === 'Completado');
+  }, [completedAreas, filters.area, user]);
+
   const handleScoreChange = (colab: string, comp: string, val: number) => {
-    if (isLocked) return;
+    if (isLocked || isAreaCompleted) return;
     setScores(prev => ({
       ...prev,
       [colab]: {
@@ -673,6 +710,25 @@ export default function App() {
       mode: 'no-cors',
       headers: { 'Content-Type': 'text/plain' },
       body: JSON.stringify(payload)
+    });
+
+    // 3. Registro de Finalización (POST adicional)
+    const completionPayload = {
+      tipo: "COMPLETAR_EVALUACION",
+      gerencia: user?.assignedGerencia || filters.gerencia,
+      area: user?.assignedArea || filters.area,
+      nombreEvaluador: user?.name,
+      correoEvaluador: user?.email,
+      fechaInicio: evaluationStartTime,
+      fechaTermino: new Date().toLocaleString()
+    };
+
+    console.log("Enviando registro de finalización...");
+    await fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      mode: 'no-cors',
+      headers: { 'Content-Type': 'text/plain' },
+      body: JSON.stringify(completionPayload)
     });
 
     // LOCAL DOWNLOADS AFTER SERVER SENDING
@@ -1045,17 +1101,24 @@ export default function App() {
                       <TrendingUp className="rotate-180" size={20} />
                     </button>
                     <div className={`flex items-center px-3 rounded-xl text-xs font-bold uppercase border ${
-                      completedAreas.includes(filters.area) 
+                      completedAreas.some(ca => ca.area === filters.area && ca.status === 'Completado') 
                         ? 'bg-emerald-100 text-emerald-700 border-emerald-200' 
                         : 'bg-slate-100 text-slate-500 border-slate-200'
                     }`}>
-                      {completedAreas.includes(filters.area) ? 'Completado' : 'Pendiente'}
+                      {completedAreas.some(ca => ca.area === filters.area && ca.status === 'Completado') ? 'Completado' : 'Pendiente'}
                     </div>
                   </div>
                 )}
               </div>
             </div>
           </div>
+
+          {isAreaCompleted && (
+            <div className="bg-amber-50 border border-amber-200 p-4 rounded-xl flex items-center gap-3 text-amber-700 font-medium mb-6">
+              <AlertTriangle size={20} />
+              Esta área ya fue evaluada
+            </div>
+          )}
 
           {/* Admin Upload Button */}
           {user.role === 'ADMINISTRADOR' && (
@@ -1115,7 +1178,7 @@ export default function App() {
                                     id={`select-${colab}-${comp}`}
                                     value={scores[colab]?.[comp] ?? ''}
                                     onChange={(e) => handleScoreChange(colab, comp, Number(e.target.value))}
-                                    disabled={isLocked}
+                                    disabled={isLocked || isAreaCompleted}
                                     className="w-full appearance-none bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-sm text-center focus:outline-none focus:ring-2 focus:ring-[#004a7c]/20 focus:border-[#004a7c] transition-all cursor-pointer disabled:bg-slate-50 disabled:cursor-not-allowed"
                                   >
                                     <option value="" disabled>-</option>
