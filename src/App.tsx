@@ -33,6 +33,8 @@ interface EvaluationData {
   puesto: string;
   colaborador: string;
   competencia: string;
+  puntajeEsperado: number;
+  status?: string;
 }
 
 interface ScoreState {
@@ -41,9 +43,8 @@ interface ScoreState {
   };
 }
 
-interface AreaStatus {
-  gerencia: string;
-  area: string;
+interface CollaboratorStatus {
+  colaborador: string;
   status: string;
 }
 
@@ -99,8 +100,8 @@ export default function App() {
     const saved = localStorage.getItem('eval_scores');
     return saved ? JSON.parse(saved) : {};
   });
-  const [completedAreas, setCompletedAreas] = useState<AreaStatus[]>(() => {
-    const saved = localStorage.getItem('eval_completed_areas');
+  const [completedCollaborators, setCompletedCollaborators] = useState<CollaboratorStatus[]>(() => {
+    const saved = localStorage.getItem('eval_completed_collaborators');
     return saved ? JSON.parse(saved) : [];
   });
   const [evaluationStartTime, setEvaluationStartTime] = useState<string>(() => {
@@ -138,8 +139,8 @@ export default function App() {
         if (response.ok) {
           const result = await response.json();
           if (Array.isArray(result)) {
-            setCompletedAreas(result);
-            localStorage.setItem('eval_completed_areas', JSON.stringify(result));
+            setCompletedCollaborators(result);
+            localStorage.setItem('eval_completed_collaborators', JSON.stringify(result));
           }
         }
       } catch (error) {
@@ -229,12 +230,14 @@ export default function App() {
                 'competencia tecnica', 'competencias tecnicas', 'tecnica', 'tecnicas',
                 'competencia especifica', 'competencias especificas'
               ]);
+              const puntajeEsperado = Number(getVal(row, ['puntaje esperado', 'puntaje_esperado', 'esperado', 'target_score', 'target'])) || 0;
+              const status = getVal(row, ['status', 'estado']);
 
               if (index === 0) {
-                console.log("First row mapping preview:", { gerencia, area, puesto, colaborador, competencia });
+                console.log("First row mapping preview:", { gerencia, area, puesto, colaborador, competencia, puntajeEsperado, status });
               }
 
-              return { gerencia, area, puesto, colaborador, competencia };
+              return { gerencia, area, puesto, colaborador, competencia, puntajeEsperado, status };
             })
             .filter(d => d.gerencia || d.area || d.puesto || d.colaborador);
 
@@ -291,17 +294,6 @@ export default function App() {
     fetchExternalData();
   }, []);
 
-  // Auto-lock based on area completion
-  useEffect(() => {
-    if (!showEvidenceModal) {
-      if (filters.area && completedAreas.includes(filters.area)) {
-        setIsLocked(true);
-      } else {
-        setIsLocked(false);
-      }
-    }
-  }, [filters.area, completedAreas, showEvidenceModal]);
-
   // Persist Data
   useEffect(() => {
     localStorage.setItem('eval_users', JSON.stringify(users));
@@ -316,8 +308,8 @@ export default function App() {
   }, [scores]);
 
   useEffect(() => {
-    localStorage.setItem('eval_completed_areas', JSON.stringify(completedAreas));
-  }, [completedAreas]);
+    localStorage.setItem('eval_completed_collaborators', JSON.stringify(completedCollaborators));
+  }, [completedCollaborators]);
 
   // Refs
   const webcamRef = useRef<Webcam>(null);
@@ -469,13 +461,19 @@ export default function App() {
     return grouped;
   }, [filteredData, filters.area]);
 
-  const isAreaCompleted = useMemo(() => {
+  const isCollaboratorCompleted = useCallback((colab: string) => {
     if (user?.email === 'mruiz@acerosarequipa.com') return false;
-    return completedAreas.some(ca => ca.area === filters.area && ca.status === 'Completado');
-  }, [completedAreas, filters.area, user]);
+    
+    // Check in completedCollaborators state
+    const isCompletedInStatus = completedCollaborators.some(cc => cc.colaborador === colab && cc.status === 'Completado');
+    if (isCompletedInStatus) return true;
+
+    // Also check in the main data if status is already "Completado"
+    return data.some(d => d.colaborador === colab && d.status === 'Completado');
+  }, [completedCollaborators, data, user]);
 
   const handleScoreChange = (colab: string, comp: string, val: number) => {
-    if (isLocked || isAreaCompleted) return;
+    if (isLocked || isCollaboratorCompleted(colab)) return;
     setScores(prev => ({
       ...prev,
       [colab]: {
@@ -488,15 +486,36 @@ export default function App() {
   const calculatePercentage = (colab: string, competencias: string[]) => {
     if (competencias.length === 0) return 0;
     const colabScores = scores[colab] || {};
-    const totalScore = competencias.reduce((sum, comp) => sum + (colabScores[comp] || 0), 0);
-    const maxPossible = competencias.length * 3;
-    return Math.round((totalScore / maxPossible) * 100);
+    
+    let totalPercentage = 0;
+    let validCompetenciesCount = 0;
+
+    competencias.forEach(comp => {
+      // Find the puntaje esperado for this competency for this specific collaborator
+      const item = filteredData.find(d => d.colaborador === colab && d.competencia === comp);
+      const esperado = item?.puntajeEsperado || 0;
+      const obtenido = colabScores[comp] || 0;
+
+      if (esperado > 0) {
+        const pct = (obtenido / esperado) * 100;
+        totalPercentage += pct;
+        validCompetenciesCount++;
+      }
+    });
+
+    if (validCompetenciesCount === 0) return 0;
+    return Math.round(totalPercentage / validCompetenciesCount);
   };
 
   const getStatus = (pct: number) => {
     if (pct >= 70) return { label: 'Aprobado', color: 'bg-emerald-100 text-emerald-700 border-emerald-200' };
     if (pct >= 50) return { label: 'Con oportunidad de mejora', color: 'bg-amber-100 text-amber-700 border-amber-200' };
     return { label: 'Desaprobado', color: 'bg-rose-100 text-rose-700 border-rose-200' };
+  };
+
+  const getPuntajeEsperado = (puesto: string, competencia: string) => {
+    const item = filteredData.find(d => d.puesto === puesto && d.competencia === competencia);
+    return item?.puntajeEsperado || 0;
   };
 
   // Save and Evidence Flow
@@ -507,6 +526,7 @@ export default function App() {
 
     (Object.entries(dataByPuesto) as [string, { colaboradores: string[], competencias: string[] }][]).forEach(([puesto, info]) => {
       info.colaboradores.forEach(colab => {
+        if (isCollaboratorCompleted(colab)) return;
         info.competencias.forEach(comp => {
           const score = scores[colab]?.[comp];
           if (score === undefined || score === null) {
@@ -588,12 +608,15 @@ export default function App() {
       const resultsData: any[] = [];
     (Object.entries(dataByPuesto) as [string, { colaboradores: string[], competencias: string[] }][]).forEach(([puesto, info]) => {
       info.colaboradores.forEach(colab => {
+        if (isCollaboratorCompleted(colab)) return;
         info.competencias.forEach(comp => {
+          const item = filteredData.find(d => d.colaborador === colab && d.competencia === comp);
           resultsData.push({
             Colaborador: colab,
             Puesto: puesto,
             Competencia: comp,
-            Puntaje: scores[colab]?.[comp] ?? 0,
+            "Puntaje Obtenido": scores[colab]?.[comp] ?? 0,
+            "Puntaje Esperado": item?.puntajeEsperado || 0,
             Area: filters.area,
             Gerencia: filters.gerencia,
             Fecha: new Date().toLocaleString()
@@ -639,7 +662,7 @@ export default function App() {
       }
 
       (Object.entries(dataByPuesto) as [string, { colaboradores: string[], competencias: string[] }][]).forEach(([puesto, info]) => {
-        const colabsToProcess = info.colaboradores;
+        const colabsToProcess = info.colaboradores.filter(c => !isCollaboratorCompleted(c));
         if (colabsToProcess.length === 0) return;
 
         pdf.setFont("helvetica", "bold");
@@ -656,7 +679,8 @@ export default function App() {
           pdf.setFontSize(10);
           info.competencias.forEach(comp => {
             const score = scores[colab]?.[comp] ?? 0;
-            pdf.text(`- ${comp}: Nivel ${score}`, 30, y);
+            const esperado = getPuntajeEsperado(puesto, comp);
+            pdf.text(`- ${comp}: Nivel ${score} (Esperado: ${esperado})`, 30, y);
             y += 5;
             if (y > 270) { pdf.addPage(); y = 20; }
           });
@@ -713,6 +737,14 @@ export default function App() {
     });
 
     // 3. Registro de Finalización (POST adicional)
+    const evaluatedCollaborators = Object.keys(scores).filter(colab => {
+      const belongsToArea = filteredData.some(d => d.colaborador === colab && d.area === filters.area);
+      if (!belongsToArea) return false;
+      if (isCollaboratorCompleted(colab)) return false;
+      const colabScores = scores[colab];
+      return colabScores && Object.keys(colabScores).length > 0;
+    });
+
     const completionPayload = {
       tipo: "COMPLETAR_EVALUACION",
       gerencia: user?.assignedGerencia || filters.gerencia,
@@ -720,7 +752,8 @@ export default function App() {
       nombreEvaluador: user?.name,
       correoEvaluador: user?.email,
       fechaInicio: evaluationStartTime,
-      fechaTermino: new Date().toLocaleString()
+      fechaTermino: new Date().toLocaleString(),
+      colaboradores: evaluatedCollaborators
     };
 
     console.log("Enviando registro de finalización...");
@@ -751,12 +784,13 @@ export default function App() {
       setEvidence({ photo: '', fullName: '', signature: '' });
       setIsLocked(false);
       setShowEvidenceModal(false);
-      setCompletedAreas(prev => [...prev, filters.area]);
+      
+      const newCompleted = evaluatedCollaborators.map(c => ({ colaborador: c, status: 'Completado' }));
+      setCompletedCollaborators(prev => [...prev, ...newCompleted]);
 
     } catch (error) {
       console.error("Error sending data to Google Sheets:", error);
       alert("Evaluación finalizada localmente, pero hubo un problema al conectar con el servidor para el guardado automático.");
-      setCompletedAreas(prev => [...prev, filters.area]);
       setShowEvidenceModal(false);
     } finally {
       setIsFinalizing(false);
@@ -765,11 +799,11 @@ export default function App() {
 
   const handleRefreshArea = (areaName: string) => {
     if (window.confirm(`¿Está seguro de reiniciar el área "${areaName}"? Se borrarán todos los puntajes y se habilitará nuevamente para evaluación.`)) {
-      // Remove from completed
-      setCompletedAreas(prev => prev.filter(a => a !== areaName));
-      
-      // Clear scores for collaborators in this area
+      // Clear scores and status for collaborators in this area
       const areaColaboradores = new Set<string>(data.filter(d => d.area === areaName).map(d => d.colaborador));
+      
+      setCompletedCollaborators(prev => prev.filter(cc => !areaColaboradores.has(cc.colaborador)));
+      
       setScores(prev => {
         const newScores: ScoreState = { ...prev };
         areaColaboradores.forEach((colab: string) => {
@@ -820,12 +854,14 @@ export default function App() {
           'competencia tecnica', 'competencias tecnicas', 'tecnica', 'tecnicas',
           'competencia especifica', 'competencias especificas'
         ]);
+        const puntajeEsperado = Number(getVal(row, ['puntaje esperado', 'puntaje_esperado', 'esperado', 'target_score', 'target'])) || 0;
+        const status = getVal(row, ['status', 'estado']);
 
         if (index === 0) {
-          console.log("Manual upload first row mapping preview:", { gerencia, area, puesto, colaborador, competencia });
+          console.log("Manual upload first row mapping preview:", { gerencia, area, puesto, colaborador, competencia, puntajeEsperado, status });
         }
 
-        return { gerencia, area, puesto, colaborador, competencia };
+        return { gerencia, area, puesto, colaborador, competencia, puntajeEsperado, status };
       }).filter(d => d.gerencia || d.area || d.puesto || d.colaborador);
 
       if (mappedData.length > 0) {
@@ -1100,25 +1136,11 @@ export default function App() {
                     >
                       <TrendingUp className="rotate-180" size={20} />
                     </button>
-                    <div className={`flex items-center px-3 rounded-xl text-xs font-bold uppercase border ${
-                      completedAreas.some(ca => ca.area === filters.area && ca.status === 'Completado') 
-                        ? 'bg-emerald-100 text-emerald-700 border-emerald-200' 
-                        : 'bg-slate-100 text-slate-500 border-slate-200'
-                    }`}>
-                      {completedAreas.some(ca => ca.area === filters.area && ca.status === 'Completado') ? 'Completado' : 'Pendiente'}
-                    </div>
                   </div>
                 )}
               </div>
             </div>
           </div>
-
-          {isAreaCompleted && (
-            <div className="bg-amber-50 border border-amber-200 p-4 rounded-xl flex items-center gap-3 text-amber-700 font-medium mb-6">
-              <AlertTriangle size={20} />
-              Esta área ya fue evaluada
-            </div>
-          )}
 
           {/* Admin Upload Button */}
           {user.role === 'ADMINISTRADOR' && (
@@ -1158,9 +1180,19 @@ export default function App() {
                           <th className="p-4 text-left text-xs font-bold uppercase tracking-wider border-r border-slate-200 min-w-[250px]">
                             Competencias Técnicas
                           </th>
+                          <th className="p-4 text-center text-xs font-bold uppercase tracking-wider border-r border-slate-200 min-w-[100px]">
+                            Nivel esperado
+                          </th>
                           {info.colaboradores.map(colab => (
                             <th key={colab} className="p-4 text-center text-xs font-bold uppercase tracking-wider border-r border-slate-200 min-w-[150px]">
-                              {colab}
+                              <div className="flex flex-col items-center gap-1">
+                                {colab}
+                                {isCollaboratorCompleted(colab) && (
+                                  <span className="flex items-center gap-1 text-[10px] text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-100">
+                                    <CheckCircle2 size={10} /> Evaluado
+                                  </span>
+                                )}
+                              </div>
                             </th>
                           ))}
                         </tr>
@@ -1171,6 +1203,9 @@ export default function App() {
                             <td className="p-4 text-sm font-medium text-slate-700 border-r border-slate-200">
                               {comp}
                             </td>
+                            <td className="p-4 text-sm text-center text-slate-400 border-r border-slate-200">
+                              {getPuntajeEsperado(puesto, comp)}
+                            </td>
                             {info.colaboradores.map(colab => (
                               <td key={colab} className="p-4 border-r border-slate-200">
                                 <div className="relative">
@@ -1178,7 +1213,7 @@ export default function App() {
                                     id={`select-${colab}-${comp}`}
                                     value={scores[colab]?.[comp] ?? ''}
                                     onChange={(e) => handleScoreChange(colab, comp, Number(e.target.value))}
-                                    disabled={isLocked || isAreaCompleted}
+                                    disabled={isLocked || isCollaboratorCompleted(colab)}
                                     className="w-full appearance-none bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-sm text-center focus:outline-none focus:ring-2 focus:ring-[#004a7c]/20 focus:border-[#004a7c] transition-all cursor-pointer disabled:bg-slate-50 disabled:cursor-not-allowed"
                                   >
                                     <option value="" disabled>-</option>
@@ -1195,7 +1230,7 @@ export default function App() {
                       </tbody>
                       <tfoot>
                         <tr className="bg-slate-100 font-bold">
-                          <td className="p-4 text-sm uppercase tracking-wider text-[#004a7c] border-r border-slate-200">
+                          <td className="p-4 text-sm uppercase tracking-wider text-[#004a7c] border-r border-slate-200" colSpan={2}>
                             Estado y Porcentaje
                           </td>
                           {info.colaboradores.map(colab => {
